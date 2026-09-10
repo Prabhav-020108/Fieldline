@@ -1,0 +1,17 @@
+[
+  {
+    "id": "job-1",
+    "text": "Unit 12 - tripped overload on the 8th, reset by Anil. Resolution: breaker reset, monitored for 48h, no recurrence.",
+    "metadata": { "type": "job_history", "equipment": "unit-12", "site": "site-demo", "status": "closed" }
+  },
+  {
+    "id": "job-2",
+    "text": "Unit 12 - recurring low-refrigerant flag first logged on the 15th. Still open, refrigerant top-up scheduled.",
+    "metadata": { "type": "job_history", "equipment": "unit-12", "site": "site-demo", "status": "open" }
+  },
+  {
+    "id": "job-3",
+    "text": "Unit 7 - replaced compressor relay after intermittent trip. Resolution: relay replaced, unit running normal.",
+    "metadata": { "type": "job_history", "equipment": "unit-7", "site": "site-demo", "status": "closed" }
+  }
+]

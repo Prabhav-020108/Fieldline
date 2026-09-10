@@ -1,0 +1,12 @@
+[
+  {
+    "id": "safety-panel-b-4.2",
+    "text": "Section 4.2 - Panel B Lockout: (1) Notify affected personnel before de-energizing. (2) Shut down the equipment using the normal stop procedure. (3) Isolate the energy source at the disconnect. (4) Apply a lock and a tag identifying who applied it. (5) Release any stored energy (capacitors, springs, pressure). (6) Verify a zero-energy state with a meter before starting work.",
+    "metadata": { "type": "safety_manual", "equipment_type": "panel-b", "source_manual": "Site Electrical Safety Manual", "section": "4.2" }
+  },
+  {
+    "id": "safety-panel-a-4.1",
+    "text": "Section 4.1 - Panel A Lockout: follows the same six-step sequence as 4.2, with an additional secondary lock point at the upstream feeder breaker due to a shared bus with Panel B.",
+    "metadata": { "type": "safety_manual", "equipment_type": "panel-a", "source_manual": "Site Electrical Safety Manual", "section": "4.1" }
+  }
+]
