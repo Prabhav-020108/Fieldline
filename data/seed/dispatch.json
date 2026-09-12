@@ -1,0 +1,12 @@
+[
+  {
+    "id": "dispatch-queue-site-demo",
+    "text": "Current job queue for site-demo: 1 open job on unit-12 (recurring low-refrigerant flag, refrigerant top-up scheduled). All other jobs on site-demo are closed.",
+    "metadata": { "type": "dispatch_status", "site": "site-demo", "status": "open" }
+  },
+  {
+    "id": "dispatch-reroute-job-2",
+    "text": "Dispatch reroute: job-2 (unit-12 refrigerant top-up) was rerouted to priority status this morning due to a customer escalation. Treat it as the next job after any work currently in progress.",
+    "metadata": { "type": "dispatch_status", "site": "site-demo", "job_id": "job-2", "event": "reroute" }
+  }
+]

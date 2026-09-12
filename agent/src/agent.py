@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import textwrap
 
@@ -18,6 +19,11 @@ from tools.fault_history import fault_history
 from tools.inventory_lookup import inventory_lookup
 from tools.log_job_note import log_job_note
 from tools.safety_procedure import safety_procedure
+
+# Phase 4 additions -- offline-first pipeline and data layer.
+from connectivity import connectivity
+from local_pipeline import build_hybrid_llm, build_hybrid_stt, build_hybrid_tts, warm_up_local_stt
+from moss_client import get_index
 
 logger = logging.getLogger("fieldline-agent")
 
@@ -54,23 +60,23 @@ FIELDLINE_INSTRUCTIONS = textwrap.dedent(
       plainly instead of guessing.
     - For anything safety-critical, when in doubt, say so and point the
       technician to their supervisor rather than proceeding on a guess.
+
+    # When information is missing
+    - If the technician's request doesn't give a tool what it needs (no
+      equipment ID for fault_history, no clear topic for safety_procedure,
+      no part name for inventory_lookup), do not ask an open-ended "what do
+      you need help with." Ask for exactly the one missing detail, e.g.
+      "Which unit or equipment ID are you working on?" or "What's the part
+      number or part name?" Keep it to one short question.
     """
 )
 
 
 class FieldLineAssistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, *, llm) -> None:
         super().__init__(
             instructions=FIELDLINE_INSTRUCTIONS,
-            # Online path (Phase 3), deliberate choice: swap the LLM to Groq.
-            # Groq's inference speed matters most right here, since
-            # tool-calling latency (LLM decides to call a tool, waits on it,
-            # then composes the spoken reply) is usually the slowest link in
-            # a voice loop. STT is swapped to Groq below for the same reason.
-            # TTS is left on the starter's default (LiveKit Inference /
-            # fishaudio) since it's already fast and zero-config -- no need
-            # to touch what isn't the bottleneck.
-            llm=groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low"),
+            llm=llm,
             tools=[
                 fault_history,
                 safety_procedure,
@@ -90,13 +96,74 @@ async def entrypoint(ctx: JobContext) -> None:
         "room": ctx.room.name,
     }
 
+    # Phase 4: hydrate the local Moss SessionIndex and start the
+    # connectivity monitor *before* the call starts, so the first offline
+    # query during a live conversation never has to wait on either one.
+    await get_index()
+    connectivity.start()
+
+    # Phase 4: warm faster-whisper's model into the local cache now, while
+    # we still have network -- otherwise the first time it's actually
+    # needed (i.e. the moment you go offline) it tries to download itself
+    # and fails with no internet to do it. Runs in the background so it
+    # doesn't delay the greeting; give it ~10-20s before testing Wi-Fi-off.
+    async def _warm_up_stt() -> None:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, warm_up_local_stt)
+        except Exception:
+            logger.exception(
+                "could not warm up local STT model -- it will try (and fail) "
+                "to download on first offline use instead. Run this once "
+                "while online: uv run python -c \"from local_pipeline import "
+                "warm_up_local_stt; warm_up_local_stt()\""
+            )
+
+    asyncio.create_task(_warm_up_stt())
+
+    # Phase 4: warm Ollama's model into RAM now so the first offline LLM call
+    # doesn't pay the 15-30s cold-start penalty (loading 2GB from disk).
+    # The ping is fire-and-forget; failures are logged but never fatal.
+    async def _warm_up_llm() -> None:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=5) as c:
+                await c.get("http://localhost:11434/api/tags")  # just check it's up
+            # Send a trivial generation to load the model weights into VRAM/RAM
+            from local_pipeline import build_local_llm
+            from livekit.agents.llm import ChatContext
+            _warm_llm = build_local_llm()
+            _ctx = ChatContext()
+            _ctx.add_message(role="user", content="Say OK")
+            full = ""
+            async with _warm_llm.chat(chat_ctx=_ctx) as stream:
+                async for chunk in stream:
+                    if chunk.delta and chunk.delta.content:
+                        full += chunk.delta.content
+                        break   # just need the first token; model is now hot
+            logger.info("Ollama warm-up complete -- local LLM ready for offline use")
+        except Exception:
+            logger.warning(
+                "Ollama warm-up failed -- local LLM will have a slow first response "
+                "if you go offline before it loads. Make sure Ollama is running: "
+                "ollama serve"
+            )
+
+    asyncio.create_task(_warm_up_llm())
+
+    # Cloud providers -- unchanged from Phase 3.
+    cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
+    cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
+    cloud_tts = inference.TTS(
+        model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
+    )
+
     session = AgentSession(
-        # Swapped to Groq-hosted Whisper for the online path (see PRD).
-        stt=groq.STT(model="whisper-large-v3-turbo", language="en"),
-        # Left on the starter's default TTS -- not the latency bottleneck.
-        tts=inference.TTS(
-            model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
-        ),
+        # Phase 4: each of these tries the cloud provider first and falls
+        # back automatically to the local one (faster-whisper / Ollama /
+        # Piper) on a real failure -- see local_pipeline.py. They also
+        # auto-recover back to cloud once it's healthy again.
+        stt=build_hybrid_stt(cloud_stt),
+        tts=build_hybrid_tts(cloud_tts),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
             interruption={"mode": "adaptive"},
@@ -105,14 +172,14 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     await session.start(
-        agent=FieldLineAssistant(),
+        agent=FieldLineAssistant(llm=build_hybrid_llm(cloud_llm)),
         room=ctx.room,
     )
 
     await ctx.connect()
 
     # Short audible greeting so you can confirm the pipeline is live before
-    # asking anything -- easy sanity check for Phase 3.
+    # asking anything -- easy sanity check for both Phase 3 and Phase 4.
     await session.generate_reply(
         instructions=(
             "Greet the technician briefly, e.g. 'FieldLine here, go ahead.' "
