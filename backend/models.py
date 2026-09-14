@@ -7,7 +7,16 @@ Company, via a company_id foreign key. Safety procedures move from a
 static JSON file (Phase 2) into a real table, since a company admin edits
 these from the dashboard now, not by hand-editing a file you commit to git.
 
-NOTE ON MIGRATING AN EXISTING db.sqlite3:
+Phase 6 addition: AuditLogEntry -- one row per tool call the voice agent
+makes (fault_history / safety_procedure / inventory_lookup /
+dispatch_status / log_job_note), so a supervisor can see exactly what the
+agent told a technician and where the answer came from. This is a brand
+new table, not a change to an existing one, so it does NOT require
+deleting db.sqlite3 -- SQLAlchemy's create_all() below just adds the new
+table alongside your existing data the next time the backend starts.
+
+NOTE ON MIGRATING AN EXISTING db.sqlite3 (Phase 5 note, still applies to
+the Job/Company/InventoryItem/SafetyProcedure tables):
 SQLite does not add new columns to a table just because this file changed.
 If you already ran seed_db.py before Phase 5 (so backend/db.sqlite3
 already exists with the OLD schema), delete it before re-seeding:
@@ -21,7 +30,7 @@ and seed_db.py recreates the exact same "site-demo" rows plus a new second
 company, so nothing from Phases 1-4 is lost.
 """
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -83,6 +92,28 @@ class DispatchEvent(Base):
     technician_id = Column(String, default="")
     event_type = Column(String)  # delay / reroute / assign
     timestamp = Column(String)
+
+
+class AuditLogEntry(Base):
+    """Phase 6: an append-only record of every tool call the voice agent
+    makes. Written by agent/src/audit_log.py right after each of the five
+    tools answers a technician (fire-and-forget, so it never adds latency
+    to the voice response), and read by the dashboard's "Audit log" tab.
+
+    confidence_score and below_confidence_floor are only ever populated by
+    safety_procedure today -- the only tool with a confidence floor. Both
+    stay NULL / False for the other four tools.
+    """
+    __tablename__ = "audit_log_entries"
+    id = Column(String, primary_key=True)
+    company_id = Column(String, ForeignKey("companies.id"), index=True, nullable=False)
+    tool_name = Column(String, index=True)
+    query_text = Column(Text)
+    response_text = Column(Text)
+    source_citation = Column(String, nullable=True)
+    confidence_score = Column(Float, nullable=True)
+    below_confidence_floor = Column(Boolean, default=False)
+    created_at = Column(String, index=True)  # ISO 8601 UTC timestamp
 
 
 engine = create_engine("sqlite:///./db.sqlite3")

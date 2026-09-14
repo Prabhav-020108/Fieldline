@@ -31,6 +31,13 @@ from moss_client import get_index
 # through every tool.
 from company_context import company_id_from_room_name, set_current_company
 
+# Phase 6 addition -- every tool call now writes an entry to the
+# company's audit log (see audit_log.py and each tools/*.py file).
+# flush_all_buffers() catches up on anything logged while the backend was
+# unreachable; start_periodic_flush() keeps retrying that catch-up in the
+# background for as long as the session runs.
+from audit_log import flush_all_buffers, start_periodic_flush
+
 logger = logging.getLogger("fieldline-agent")
 
 load_dotenv(".env.local")
@@ -118,6 +125,14 @@ async def entrypoint(ctx: JobContext) -> None:
     # company_id set just above.
     await get_index()
     connectivity.start()
+
+    # Phase 6: flush any audit-log entries buffered from a previous run
+    # (e.g. this process was restarted while offline, so the normal
+    # offline -> online transition that triggers connectivity's
+    # on_reconnect hook never fired), then keep retrying that flush every
+    # 30s for the life of this session -- see audit_log.py.
+    asyncio.create_task(flush_all_buffers())
+    start_periodic_flush()
 
     # Phase 4: warm faster-whisper's model into the local cache now, while
     # we still have network -- otherwise the first time it's actually

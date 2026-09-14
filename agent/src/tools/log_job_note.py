@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from livekit.agents import RunContext, function_tool
 from moss import DocumentInfo, MutationOptions
 
+from audit_log import log_tool_call_background
 from moss_client import get_index
 
 logger = logging.getLogger("fieldline.log_job_note")
@@ -33,4 +34,8 @@ async def log_job_note(context: RunContext, equipment_id: str, note: str) -> str
 
     await client.add_docs(index_name, [doc], MutationOptions(upsert=True))
 
-    return f"Got it, I've logged that note against {equipment_id}."
+    answer = f"Got it, I've logged that note against {equipment_id}."
+
+    log_tool_call_background("log_job_note", f"{equipment_id}: {note}", answer)
+
+    return answer

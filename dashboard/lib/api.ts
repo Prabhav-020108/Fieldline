@@ -1,4 +1,4 @@
-import type { Company, InventoryItem, Job, SafetyProcedure } from "./types";
+import type { AuditLogEntry, Company, InventoryItem, Job, SafetyProcedure } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -169,3 +169,12 @@ export const deleteSafetyProcedure = (companyId: string, procedureId: string) =>
   request<void>(`/companies/${companyId}/safety-procedures/${procedureId}`, {
     method: "DELETE",
   });
+
+// ---------------------------------------------------------------------------
+// Audit log (Phase 6)
+// ---------------------------------------------------------------------------
+
+export const listAuditLog = (companyId: string, limit = 200) =>
+  request<AuditLogEntry[]>(
+    `/companies/${companyId}/audit-log?limit=${limit}`
+  );

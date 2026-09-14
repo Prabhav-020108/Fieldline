@@ -3,6 +3,7 @@ import logging
 from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
+from audit_log import log_tool_call_background
 from moss_client import get_index
 
 logger = logging.getLogger("fieldline.fault_history")
@@ -33,10 +34,17 @@ async def fault_history(context: RunContext, equipment_id: str) -> str:
     )
 
     if not results.docs:
-        return (
+        answer = (
             f"I couldn't find any job history for {equipment_id} in the index. "
             "Double-check the equipment ID -- this may be a new unit with no logged history yet."
         )
+    else:
+        lines = [doc.text for doc in results.docs]
+        answer = f"Job history for {equipment_id}: " + " ".join(lines)
 
-    lines = [doc.text for doc in results.docs]
-    return f"Job history for {equipment_id}: " + " ".join(lines)
+    # Phase 6: record this Q&A in the company's audit log. Fire-and-forget
+    # -- see audit_log.py for why this never blocks or slows down the
+    # voice response.
+    log_tool_call_background("fault_history", equipment_id, answer)
+
+    return answer

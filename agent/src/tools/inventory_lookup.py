@@ -3,6 +3,7 @@ import logging
 from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
+from audit_log import log_tool_call_background
 from moss_client import get_index
 
 logger = logging.getLogger("fieldline.inventory_lookup")
@@ -30,10 +31,14 @@ async def inventory_lookup(context: RunContext, part_number: str) -> str:
     )
 
     if not results.docs:
-        return (
+        answer = (
             f"I couldn't find {part_number} in the inventory index. "
             "It may not be stocked at this site, or the part number might be off."
         )
+    else:
+        lines = [doc.text for doc in results.docs]
+        answer = " ".join(lines)
 
-    lines = [doc.text for doc in results.docs]
-    return " ".join(lines)
+    log_tool_call_background("inventory_lookup", part_number, answer)
+
+    return answer

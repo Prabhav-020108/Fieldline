@@ -13,6 +13,7 @@ const TABS: { href: string; label: string }[] = [
   { href: "", label: "Overview" },
   { href: "/jobs", label: "Jobs" },
   { href: "/safety", label: "Safety procedures" },
+  { href: "/audit", label: "Audit log" },
   { href: "/inventory", label: "Inventory" },
   { href: "/call", label: "Talk to agent" },
 ];

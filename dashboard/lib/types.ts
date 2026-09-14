@@ -47,6 +47,27 @@ export interface SafetyProcedure {
   source_manual: string;
 }
 
+// Phase 6: one row per tool call the voice agent makes. Written by
+// agent/src/audit_log.py, read by the "Audit log" dashboard tab.
+export type ToolName =
+  | "fault_history"
+  | "safety_procedure"
+  | "inventory_lookup"
+  | "dispatch_status"
+  | "log_job_note";
+
+export interface AuditLogEntry {
+  id: string;
+  company_id: string;
+  tool_name: ToolName;
+  query_text: string;
+  response_text: string;
+  source_citation: string | null;
+  confidence_score: number | null;
+  below_confidence_floor: boolean;
+  created_at: string; // ISO 8601 UTC
+}
+
 export const INDUSTRIES: { value: Industry; label: string }[] = [
   { value: "electrical", label: "Electrical maintenance" },
   { value: "hvac", label: "HVAC" },
@@ -60,3 +81,11 @@ export const LANGUAGES: { value: LanguagePreference; label: string }[] = [
   { value: "hindi", label: "Hindi" },
   { value: "english", label: "English" },
 ];
+
+export const TOOL_LABELS: Record<ToolName, string> = {
+  fault_history: "Fault history",
+  safety_procedure: "Safety procedure",
+  inventory_lookup: "Inventory lookup",
+  dispatch_status: "Dispatch status",
+  log_job_note: "Job note logged",
+};

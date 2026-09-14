@@ -7,6 +7,12 @@ Endpoints, grouped by resource:
   - /companies/{id}/jobs                        job CRUD + /reroute
   - /companies/{id}/inventory                   inventory CRUD
   - /companies/{id}/safety-procedures           safety-procedure CRUD
+  - /companies/{id}/audit-log                   Phase 6: append-only log of
+                                                 every tool call the voice
+                                                 agent makes, written by
+                                                 agent/src/audit_log.py and
+                                                 read by the dashboard's
+                                                 "Audit log" tab
   - /companies/{id}/export                      everything the agent needs
                                                  to hydrate that company's
                                                  local, offline-capable
@@ -17,7 +23,8 @@ Endpoints, grouped by resource:
 
 Every write endpoint also fires a background sync to Moss, so a dashboard
 edit shows up on the technician's next tool call without waiting on a cron
-job or a manual `python moss_sync.py` run.
+job or a manual `python moss_sync.py` run. Audit-log writes are the one
+exception -- they are not retrieval data, so they never touch Moss.
 
 Run this from the backend/ folder, with its virtual environment active:
 
@@ -38,7 +45,7 @@ from pydantic import BaseModel, ConfigDict
 
 import moss_sync
 from document_builder import dispatch_queue_doc, dispatch_reroute_doc, inventory_to_doc, job_to_doc, safety_to_doc
-from models import Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, init_db
+from models import AuditLogEntry, Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, init_db
 
 logger = logging.getLogger("fieldline.backend")
 logging.basicConfig(level=logging.INFO)
@@ -138,6 +145,38 @@ class SafetyProcedureOut(BaseModel):
     section: str
     text: str
     source_manual: str
+
+
+class AuditLogIn(BaseModel):
+    """What agent/src/audit_log.py POSTs after every tool call.
+    confidence_score and source_citation are only ever set by
+    safety_procedure today -- every other tool leaves them at their
+    defaults (None / False). created_at is optional: normally the backend
+    stamps it on receipt, but when the agent replays an entry that was
+    buffered locally while offline (see audit_log.py's flush_all_buffers),
+    it sends the ORIGINAL local timestamp here so the audit trail reflects
+    when the tool call actually happened, not when it finally reached the
+    backend."""
+    tool_name: str
+    query_text: str
+    response_text: str
+    source_citation: Optional[str] = None
+    confidence_score: Optional[float] = None
+    below_confidence_floor: bool = False
+    created_at: Optional[str] = None
+
+
+class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    company_id: str
+    tool_name: str
+    query_text: str
+    response_text: str
+    source_citation: Optional[str] = None
+    confidence_score: Optional[float] = None
+    below_confidence_floor: bool
+    created_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -539,3 +578,53 @@ def delete_safety_procedure(company_id: str, procedure_id: str, background_tasks
     finally:
         db.close()
     return None
+
+
+# ---------------------------------------------------------------------------
+# Audit log (Phase 6)
+# ---------------------------------------------------------------------------
+
+@app.post("/companies/{company_id}/audit-log", response_model=AuditLogOut, status_code=201)
+def create_audit_log_entry(company_id: str, payload: AuditLogIn):
+    """Called by agent/src/audit_log.py after every tool call. Never
+    triggers a Moss sync -- audit entries are a record of what happened,
+    not retrieval data."""
+    db = SessionLocal()
+    try:
+        _get_company_or_404(db, company_id)
+        entry = AuditLogEntry(
+            id=f"audit-{_new_id()}",
+            company_id=company_id,
+            tool_name=payload.tool_name,
+            query_text=payload.query_text,
+            response_text=payload.response_text,
+            source_citation=payload.source_citation,
+            confidence_score=payload.confidence_score,
+            below_confidence_floor=payload.below_confidence_floor,
+            created_at=payload.created_at or datetime.now(timezone.utc).isoformat(),
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
+        return entry
+    finally:
+        db.close()
+
+
+@app.get("/companies/{company_id}/audit-log", response_model=list[AuditLogOut])
+def list_audit_log(company_id: str, limit: int = 200):
+    """Most recent entries first -- read by the dashboard's "Audit log"
+    tab. `limit` defaults to 200, which comfortably covers a demo or a
+    single shift."""
+    db = SessionLocal()
+    try:
+        _get_company_or_404(db, company_id)
+        return (
+            db.query(AuditLogEntry)
+            .filter(AuditLogEntry.company_id == company_id)
+            .order_by(AuditLogEntry.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+    finally:
+        db.close()

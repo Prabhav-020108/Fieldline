@@ -11,6 +11,12 @@ KMS
 .pytest_cache
 .ruff_cache
 
+# Phase 6: local, durable buffer for audit-log entries logged while the
+# FastAPI backend is unreachable -- see agent/src/audit_log.py. Contains
+# only mirrored operational data (what a tool told a technician), nothing
+# secret, but it's per-machine runtime state, not something to commit.
+_audit_buffer/
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/

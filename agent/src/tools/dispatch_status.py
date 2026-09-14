@@ -3,6 +3,7 @@ import logging
 from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
+from audit_log import log_tool_call_background
 from moss_client import get_index
 
 logger = logging.getLogger("fieldline.dispatch_status")
@@ -29,7 +30,15 @@ async def dispatch_status(context: RunContext) -> str:
     )
 
     if not results.docs:
-        return "I don't see any dispatch updates right now -- your queue looks unchanged."
+        answer = "I don't see any dispatch updates right now -- your queue looks unchanged."
+    else:
+        lines = [doc.text for doc in results.docs]
+        answer = " ".join(lines)
 
-    lines = [doc.text for doc in results.docs]
-    return " ".join(lines)
+    # dispatch_status takes no argument from the technician, so the audit
+    # log's "query" column just records that a status check happened.
+    log_tool_call_background(
+        "dispatch_status", "current job queue and dispatch status", answer
+    )
+
+    return answer
