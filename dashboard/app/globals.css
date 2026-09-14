@@ -1,26 +1,106 @@
 @import "tailwindcss";
 
+/*
+ * FieldLine dispatch dashboard -- design tokens.
+ *
+ * Grounded in the subject matter rather than a generic SaaS default: this
+ * is an operations tool for field-service companies (electrical, HVAC,
+ * elevator AMC, telecom towers), so the palette leans on a deep utility
+ * teal (the kind of blue-green many electric utilities already use) as
+ * the primary accent, and a copper/amber -- an electrical-wire, hazard-
+ * signage color -- reserved for "needs attention" states (a rerouted job,
+ * a low-confidence safety answer). Geist Mono is used deliberately for
+ * technical/system values (part numbers, equipment IDs, Moss index
+ * names) to visually separate "data" from "prose" -- not decoration.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #f5f6f8;         /* page background */
+  --surface: #ffffff;       /* card / table background */
+  --surface-sunken: #fafbfc;/* table header, subtle recessed areas */
+  --line: #e2e5eb;          /* hairline borders */
+  --line-strong: #cdd2db;
+
+  --ink: #12161c;           /* primary text */
+  --ink-muted: #5a6270;     /* secondary text */
+  --ink-faint: #8b93a1;     /* placeholders, tertiary text */
+
+  --brand: #0f6f6b;         /* utility teal -- primary actions, active nav */
+  --brand-strong: #0b5a57;  /* hover / pressed */
+  --brand-tint: #e6f3f2;    /* soft background for active/selected */
+
+  --amber: #b76e00;         /* priority / needs-attention */
+  --amber-tint: #fdf3e2;
+
+  --danger: #b42318;
+  --danger-tint: #fef3f2;
+
+  --success: #15803d;
+  --success-tint: #eefaf1;
+
+  --info: #1d5fae;
+  --info-tint: #eaf2fb;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+
+  --shadow-card: 0 1px 2px rgba(18, 22, 28, 0.04), 0 1px 3px rgba(18, 22, 28, 0.05);
+  --shadow-modal: 0 12px 32px rgba(18, 22, 28, 0.18), 0 3px 10px rgba(18, 22, 28, 0.08);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+::selection {
+  background: var(--brand-tint);
+  color: var(--brand-strong);
+}
+
+/* Thin, unobtrusive scrollbars so dense tables still feel considered
+   instead of showing the chunky OS default. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b6bcc7;
+}
+
+/* Visible keyboard focus everywhere -- premium doesn't mean invisible. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "job-elev-1",
+    "text": "lift-3 - Door sensor misalignment causing intermittent re-opens. Resolution: Sensor bracket realigned and torqued, tested 20 cycles clean.",
+    "metadata": {
+      "type": "job_history",
+      "equipment": "lift-3",
+      "site": "tower-a",
+      "status": "closed"
+    }
+  },
+  {
+    "id": "job-elev-2",
+    "text": "lift-3 - Overspeed governor tripped during routine inspection on the 10th. Resolution: open.",
+    "metadata": {
+      "type": "job_history",
+      "equipment": "lift-3",
+      "site": "tower-a",
+      "status": "open"
+    }
+  },
+  {
+    "id": "inventory-elev-inv-1",
+    "text": "Overspeed governor switch assembly (part GOV-OS-200) - stored at tower-a machine room, shelf 2, qty 1.",
+    "metadata": {
+      "type": "inventory",
+      "part_number": "GOV-OS-200",
+      "location": "tower-a machine room, shelf 2"
+    }
+  },
+  {
+    "id": "safety-elev-lockout-3.1",
+    "text": "Section 3.1 - Traction Lift Lockout: (1) Notify building management and post an out-of-service sign at every landing. (2) Recall the car to the machine-room level and open the main disconnect. (3) Apply lock and tag at the disconnect. (4) Mechanically block the car with the car-top safety bar before anyone enters the shaft or pit. (5) Verify zero energy at the controller with a meter before starting work.",
+    "metadata": {
+      "type": "safety_manual",
+      "equipment_type": "traction-lift",
+      "source_manual": "Acme Elevator AMC Safety Manual",
+      "section": "3.1"
+    }
+  },
+  {
+    "id": "dispatch-queue-acme-elevator",
+    "text": "Current job queue for acme-elevator: 1 open job(s) -- lift-3 (Overspeed governor tripped during routine inspection on the 10th).",
+    "metadata": {
+      "type": "dispatch_status",
+      "company_id": "acme-elevator",
+      "status": "open"
+    }
+  }
+]

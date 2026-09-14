@@ -1,0 +1,60 @@
+[
+  {
+    "id": "job-1",
+    "text": "unit-12 - Tripped overload on the 8th, reset by Anil. Resolution: Breaker reset, monitored 48h.",
+    "metadata": {
+      "type": "job_history",
+      "equipment": "unit-12",
+      "site": "site-demo",
+      "status": "closed"
+    }
+  },
+  {
+    "id": "job-2",
+    "text": "unit-12 - Recurring low-refrigerant flag on the 15th. Resolution: open.",
+    "metadata": {
+      "type": "job_history",
+      "equipment": "unit-12",
+      "site": "site-demo",
+      "status": "open"
+    }
+  },
+  {
+    "id": "inventory-1",
+    "text": "Schneider contactor (part LC1D18) - stored at bin 14C, site store room, qty 3.",
+    "metadata": {
+      "type": "inventory",
+      "part_number": "LC1D18",
+      "location": "bin 14C, site store room"
+    }
+  },
+  {
+    "id": "safety-panel-b-4.2",
+    "text": "Section 4.2 - Panel B Lockout: (1) Notify affected personnel before de-energizing. (2) Shut down the equipment using the normal stop procedure. (3) Isolate the energy source at the disconnect. (4) Apply a lock and a tag identifying who applied it. (5) Release any stored energy (capacitors, springs, pressure). (6) Verify a zero-energy state with a meter before starting work.",
+    "metadata": {
+      "type": "safety_manual",
+      "equipment_type": "panel-b",
+      "source_manual": "Site Electrical Safety Manual",
+      "section": "4.2"
+    }
+  },
+  {
+    "id": "safety-panel-a-4.1",
+    "text": "Section 4.1 - Panel A Lockout: follows the same six-step sequence as 4.2, with an additional secondary lock point at the upstream feeder breaker due to a shared bus with Panel B.",
+    "metadata": {
+      "type": "safety_manual",
+      "equipment_type": "panel-a",
+      "source_manual": "Site Electrical Safety Manual",
+      "section": "4.1"
+    }
+  },
+  {
+    "id": "dispatch-queue-site-demo",
+    "text": "Current job queue for site-demo: 1 open job(s) -- unit-12 (Recurring low-refrigerant flag on the 15th).",
+    "metadata": {
+      "type": "dispatch_status",
+      "company_id": "site-demo",
+      "status": "open"
+    }
+  }
+]

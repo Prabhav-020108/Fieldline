@@ -42,7 +42,12 @@ logger = logging.getLogger("fieldline.local_pipeline")
 
 # All overridable via .env.local if you want to change models/ports without
 # editing code. Sensible defaults are baked in so this works out of the box.
-WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small.en")
+#
+# IMPORTANT: this must NOT end in ".en" (e.g. "small.en", "tiny.en"). Those
+# are English-only Whisper variants -- they cannot transcribe Hindi/Hinglish
+# at all and will force-fit non-English audio into English-sounding garbage.
+# "small" (no suffix) is the multilingual variant.
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 PIPER_TTS_BASE_URL = os.environ.get("PIPER_TTS_BASE_URL", "http://localhost:8880/v1")
@@ -58,10 +63,14 @@ class FasterWhisperSTT(stt.STT):
     stt.FallbackAdapter.
     """
 
-    def __init__(self, *, model_size: str = WHISPER_MODEL_SIZE, language: str = "en") -> None:
+    def __init__(self, *, model_size: str = WHISPER_MODEL_SIZE, language: str | None = None) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False)
         )
+        # None = auto-detect the spoken language per utterance. Forcing "en"
+        # here would make even the multilingual model decode Hindi/Hinglish
+        # audio as English -- the model choice alone isn't enough, this
+        # matters too.
         self._language = language
         self._model_size = model_size
         self._model = None  # lazy-loaded on first use, see _ensure_model
@@ -105,29 +114,36 @@ class FasterWhisperSTT(stt.STT):
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         effective_language = self._language if language is NOT_GIVEN else language
 
-        def _transcribe() -> str:
+        def _transcribe() -> tuple[str, str]:
             model = self._ensure_model()
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                     tmp.write(wav_bytes)
                     tmp_path = tmp.name
-                segments, _info = model.transcribe(
+                segments, info = model.transcribe(
                     tmp_path,
                     language=effective_language,
                     vad_filter=False,  # AgentSession's own VAD already segmented this
                 )
-                return "".join(segment.text for segment in segments).strip()
+                text = "".join(segment.text for segment in segments).strip()
+                # info.language is what Whisper actually detected when
+                # effective_language was None -- use that for the returned
+                # SpeechEvent rather than echoing back None.
+                detected_language = info.language or effective_language or "en"
+                return text, detected_language
             finally:
                 if tmp_path and os.path.exists(tmp_path):
                     os.remove(tmp_path)
 
-        text = await asyncio.get_event_loop().run_in_executor(None, _transcribe)
-        logger.info("faster-whisper transcribed: %r", text)
+        text, detected_language = await asyncio.get_event_loop().run_in_executor(
+            None, _transcribe
+        )
+        logger.info("faster-whisper transcribed (%s): %r", detected_language, text)
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=effective_language)],
+            alternatives=[stt.SpeechData(text=text, language=detected_language)],
         )
 
 

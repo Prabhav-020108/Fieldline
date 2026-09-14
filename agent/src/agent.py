@@ -25,6 +25,12 @@ from connectivity import connectivity
 from local_pipeline import build_hybrid_llm, build_hybrid_stt, build_hybrid_tts, warm_up_local_stt
 from moss_client import get_index
 
+# Phase 5 addition -- multi-tenant company identity, resolved once per call
+# from the room name. See company_context.py for the full explanation of
+# why this uses a ContextVar instead of a function argument threaded
+# through every tool.
+from company_context import company_id_from_room_name, set_current_company
+
 logger = logging.getLogger("fieldline-agent")
 
 load_dotenv(".env.local")
@@ -92,13 +98,24 @@ server = AgentServer()
 
 @server.rtc_session(agent_name="fieldline-agent")
 async def entrypoint(ctx: JobContext) -> None:
+    # Phase 5: work out which company this call belongs to from the room
+    # name (rooms are named "fieldline-<company_id>" by the dashboard /
+    # whatever creates the room -- see company_context.py). This MUST run
+    # before session.start() below, so every tool call triggered by this
+    # session sees the right company via moss_client.get_index().
+    company_id = company_id_from_room_name(ctx.room.name)
+    set_current_company(company_id)
+
     ctx.log_context_fields = {
         "room": ctx.room.name,
+        "company_id": company_id,
     }
 
     # Phase 4: hydrate the local Moss SessionIndex and start the
     # connectivity monitor *before* the call starts, so the first offline
     # query during a live conversation never has to wait on either one.
+    # Phase 5: get_index() now hydrates THIS company's session, using the
+    # company_id set just above.
     await get_index()
     connectivity.start()
 
