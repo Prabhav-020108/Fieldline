@@ -1,16 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Plus, Radio } from "lucide-react";
+import { LogIn, LogOut, Plus, Radio } from "lucide-react";
 
-import { listCompanies } from "@/lib/api";
+import { getCurrentUser, isLoggedIn, listCompanies, logout } from "@/lib/api";
 import type { Company } from "@/lib/types";
+
+interface CurrentUser {
+  username: string;
+  role: string;
+  company_id: string;
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [companies, setCompanies] = useState<Company[] | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,9 +32,27 @@ export default function Sidebar() {
     return () => {
       cancelled = true;
     };
-    // Re-fetch whenever the route changes, so a newly created company
-    // shows up here without a manual refresh.
   }, [pathname]);
+
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      setCurrentUser(null);
+      return;
+    }
+    getCurrentUser()
+      .then(setCurrentUser)
+      .catch(() => {
+        // token expired/invalid -- clear it quietly rather than showing an error
+        logout();
+        setCurrentUser(null);
+      });
+  }, [pathname]);
+
+  const handleLogout = () => {
+    logout();
+    setCurrentUser(null);
+    router.push("/");
+  };
 
   return (
     <aside className="w-64 shrink-0 border-r border-[var(--line)] bg-[var(--surface)] flex flex-col h-screen sticky top-0">
@@ -86,7 +112,33 @@ export default function Sidebar() {
         )}
       </nav>
 
-      <div className="px-5 py-4 border-t border-[var(--line)]">
+      <div className="px-5 py-4 border-t border-[var(--line)] space-y-3">
+        {currentUser ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-[var(--ink)] truncate">
+                {currentUser.username}
+              </p>
+              <p className="text-[11px] text-[var(--ink-faint)] capitalize">{currentUser.role}</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-[var(--ink-faint)] hover:text-[var(--danger)] rounded p-1 shrink-0 cursor-pointer"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut size={14} />
+            </button>
+          </div>
+        ) : (
+          <Link
+            href="/login"
+            className="flex items-center gap-1.5 text-sm text-[var(--brand)] hover:underline"
+          >
+            <LogIn size={14} />
+            Sign in
+          </Link>
+        )}
         <p className="text-xs text-[var(--ink-faint)] leading-relaxed">
           Each company keeps its own Moss index -- job history, safety
           procedures, and inventory never cross between companies.

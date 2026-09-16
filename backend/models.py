@@ -1,33 +1,17 @@
 """
 SQLAlchemy models for the FieldLine dispatch backend.
 
-Phase 5 change: FieldLine is now multi-tenant. Every table that used to
-belong to a single hardcoded "site-demo" site now belongs to a specific
-Company, via a company_id foreign key. Safety procedures move from a
-static JSON file (Phase 2) into a real table, since a company admin edits
-these from the dashboard now, not by hand-editing a file you commit to git.
+Phase 5: multi-tenancy via company_id on every table.
+Phase 6: AuditLogEntry -- append-only record of every tool call.
+Phase 7: User -- login accounts for the dashboard's JWT auth + RBAC (see
+backend/auth.py). Brand new table, so no need to delete db.sqlite3;
+SQLAlchemy's create_all() just adds it alongside your existing data.
 
-Phase 6 addition: AuditLogEntry -- one row per tool call the voice agent
-makes (fault_history / safety_procedure / inventory_lookup /
-dispatch_status / log_job_note), so a supervisor can see exactly what the
-agent told a technician and where the answer came from. This is a brand
-new table, not a change to an existing one, so it does NOT require
-deleting db.sqlite3 -- SQLAlchemy's create_all() below just adds the new
-table alongside your existing data the next time the backend starts.
-
-NOTE ON MIGRATING AN EXISTING db.sqlite3 (Phase 5 note, still applies to
-the Job/Company/InventoryItem/SafetyProcedure tables):
-SQLite does not add new columns to a table just because this file changed.
-If you already ran seed_db.py before Phase 5 (so backend/db.sqlite3
-already exists with the OLD schema), delete it before re-seeding:
-
-    cd backend
-    Remove-Item db.sqlite3 -ErrorAction SilentlyContinue
-    python seed_db.py
-
-This only deletes local demo data -- your Moss cloud index is untouched,
-and seed_db.py recreates the exact same "site-demo" rows plus a new second
-company, so nothing from Phases 1-4 is lost.
+NOTE ON MIGRATING AN EXISTING db.sqlite3 (only relevant if you're changing
+an EXISTING column, not adding a new table): SQLite does not add new
+columns to a table just because this file changed. If that ever happens,
+delete db.sqlite3 and re-run seed_db.py -- your Moss cloud index is
+untouched either way.
 """
 
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine
@@ -42,10 +26,6 @@ class Company(Base):
     name = Column(String, nullable=False)
     industry = Column(String, default="other")
     language_preference = Column(String, default="hinglish")
-    # The Moss cloud index this company's data lives in. Kept as its own
-    # column (rather than always deriving it as f"company-{id}") so
-    # Company #1 can keep using the literal "site-demo" index created back
-    # in Phase 2, unchanged.
     moss_index_name = Column(String, nullable=False)
 
 
@@ -58,9 +38,6 @@ class Job(Base):
     fault_description = Column(String)
     resolution = Column(String, nullable=True)
     status = Column(String, default="open")
-    # Set by the dashboard's "Reroute to priority" action -- see main.py's
-    # reroute_job(). Drives the dispatch-reroute document the agent's
-    # dispatch_status tool retrieves.
     priority = Column(Boolean, default=False)
 
 
@@ -80,7 +57,7 @@ class SafetyProcedure(Base):
     company_id = Column(String, ForeignKey("companies.id"), index=True, nullable=False)
     equipment_type = Column(String)
     section = Column(String)
-    text = Column(Text)  # exact, verbatim procedure text -- read back close to word-for-word by the agent
+    text = Column(Text)
     source_manual = Column(String, default="Site Safety Manual")
 
 
@@ -90,20 +67,11 @@ class DispatchEvent(Base):
     company_id = Column(String, ForeignKey("companies.id"), index=True, nullable=False)
     job_id = Column(String, ForeignKey("jobs.id"))
     technician_id = Column(String, default="")
-    event_type = Column(String)  # delay / reroute / assign
+    event_type = Column(String)
     timestamp = Column(String)
 
 
 class AuditLogEntry(Base):
-    """Phase 6: an append-only record of every tool call the voice agent
-    makes. Written by agent/src/audit_log.py right after each of the five
-    tools answers a technician (fire-and-forget, so it never adds latency
-    to the voice response), and read by the dashboard's "Audit log" tab.
-
-    confidence_score and below_confidence_floor are only ever populated by
-    safety_procedure today -- the only tool with a confidence floor. Both
-    stay NULL / False for the other four tools.
-    """
     __tablename__ = "audit_log_entries"
     id = Column(String, primary_key=True)
     company_id = Column(String, ForeignKey("companies.id"), index=True, nullable=False)
@@ -113,7 +81,21 @@ class AuditLogEntry(Base):
     source_citation = Column(String, nullable=True)
     confidence_score = Column(Float, nullable=True)
     below_confidence_floor = Column(Boolean, default=False)
-    created_at = Column(String, index=True)  # ISO 8601 UTC timestamp
+    created_at = Column(String, index=True)
+
+
+class User(Base):
+    """Phase 7: dashboard login accounts. Provisioned by seed_db.py, not
+    through a public self-registration endpoint -- FieldLine is an
+    internal ops tool with admin-provisioned accounts, not a public
+    service. role is one of "technician" / "supervisor" / "dispatcher";
+    see backend/auth.py for what each role can do."""
+    __tablename__ = "users"
+    id = Column(String, primary_key=True)
+    company_id = Column(String, ForeignKey("companies.id"), index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="technician")
 
 
 engine = create_engine("sqlite:///./db.sqlite3")

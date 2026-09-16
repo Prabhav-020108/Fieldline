@@ -2,30 +2,32 @@
 Seeds backend/db.sqlite3 with demo data for TWO companies:
 
   - "site-demo"      -- the original electrical-maintenance demo data from
-                         Phases 1-4, kept exactly the same content-wise so
-                         your primary, most-rehearsed demo path doesn't
-                         change at all.
-  - "acme-elevator"  -- a small, differently-industried second company
-                         (elevator AMC), added in Phase 5 purely to prove
-                         the multi-tenant architecture live: same agent
-                         code, same five tools, a completely different
-                         dataset, zero cross-contamination.
+                         Phases 1-4, kept exactly the same content-wise.
+  - "acme-elevator"  -- a second company (elevator AMC), added in Phase 5
+                         to prove the multi-tenant architecture.
 
-Phase 5 changed the schema (added Company and SafetyProcedure tables, a
-company_id column, and a priority flag on Job). SQLite will NOT add those
-new columns to an existing db.sqlite3 on its own -- if you already have one
-from before Phase 5, delete it first:
+Phase 7 addition: demo login accounts, one of each role (technician /
+supervisor / dispatcher) per company, so you can log in to the dashboard
+and exercise the RBAC rules on both companies. See backend/auth.py for
+what each role can do.
+
+Safe to re-run any time -- every row uses db.merge(...), so re-running
+this script just re-applies the same seed data instead of duplicating
+rows.
+
+If you have a db.sqlite3 from BEFORE Phase 5's schema, delete it first:
 
     cd backend
     Remove-Item db.sqlite3 -ErrorAction SilentlyContinue
     python seed_db.py
 
-Safe to re-run any time after that -- every row uses db.merge(...), so
-re-running this script just re-applies the same seed data instead of
-duplicating rows.
+Phase 6 and Phase 7 both only ADD new tables (AuditLogEntry, User), so if
+your db.sqlite3 already has the Phase 5 schema, you do NOT need to delete
+it again for either of those -- just re-run this script.
 """
 
-from models import Company, InventoryItem, Job, SafetyProcedure, SessionLocal, init_db
+from auth import hash_password
+from models import Company, InventoryItem, Job, SafetyProcedure, SessionLocal, User, init_db
 
 init_db()
 db = SessionLocal()
@@ -40,7 +42,7 @@ companies = [
         name="Site Demo Electrical Co.",
         industry="electrical",
         language_preference="hinglish",
-        moss_index_name="site-demo",  # the exact index created back in Phase 2 -- unchanged
+        moss_index_name="site-demo",
     ),
     Company(
         id="acme-elevator",
@@ -129,7 +131,7 @@ for proc in safety_procedures:
     db.merge(proc)
 
 # ---------------------------------------------------------------------------
-# acme-elevator -- new second company, added in Phase 5
+# acme-elevator -- second company, added in Phase 5
 # ---------------------------------------------------------------------------
 
 elevator_jobs = [
@@ -191,6 +193,65 @@ elevator_safety = [
 for proc in elevator_safety:
     db.merge(proc)
 
+# ---------------------------------------------------------------------------
+# Demo user accounts (Phase 7) -- one of each role per company.
+# Passwords are intentionally simple demo values -- these are for local
+# testing only. Change them (or reseed with your own) before this ever
+# leaves your machine.
+# ---------------------------------------------------------------------------
+
+DEMO_PASSWORD = "FieldLine123!"
+
+demo_users = [
+    User(
+        id="user-site-demo-tech",
+        company_id="site-demo",
+        username="tech.demo",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="technician",
+    ),
+    User(
+        id="user-site-demo-supervisor",
+        company_id="site-demo",
+        username="supervisor.demo",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="supervisor",
+    ),
+    User(
+        id="user-site-demo-dispatcher",
+        company_id="site-demo",
+        username="dispatcher.demo",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="dispatcher",
+    ),
+    User(
+        id="user-acme-tech",
+        company_id="acme-elevator",
+        username="tech.acme",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="technician",
+    ),
+    User(
+        id="user-acme-supervisor",
+        company_id="acme-elevator",
+        username="supervisor.acme",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="supervisor",
+    ),
+    User(
+        id="user-acme-dispatcher",
+        company_id="acme-elevator",
+        username="dispatcher.acme",
+        hashed_password=hash_password(DEMO_PASSWORD),
+        role="dispatcher",
+    ),
+]
+for user in demo_users:
+    db.merge(user)
+
 db.commit()
 db.close()
-print("Seeded db.sqlite3: 2 companies, jobs, inventory, and safety procedures.")
+print(
+    "Seeded db.sqlite3: 2 companies, jobs, inventory, safety procedures, "
+    f"and 6 demo login accounts (password for all: {DEMO_PASSWORD})."
+)

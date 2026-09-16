@@ -4,7 +4,10 @@ from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
 from audit_log import log_tool_call_background
+from company_context import get_current_room_name
+from connectivity import connectivity
 from moss_client import get_index
+from tracing import prompt_hash, traced_stage
 
 logger = logging.getLogger("fieldline.fault_history")
 
@@ -23,15 +26,25 @@ async def fault_history(context: RunContext, equipment_id: str) -> str:
     logger.info("fault_history lookup for %s", equipment_id)
 
     client, index_name = await get_index()
-    results = await client.query(
-        index_name,
-        f"job and fault history for {equipment_id}",
-        QueryOptions(
-            top_k=5,
-            alpha=0.5,
-            filter={"field": "type", "condition": {"$eq": "job_history"}},
-        ),
-    )
+    path = "online" if connectivity.is_online else "offline"
+
+    with traced_stage(
+        "retrieval",
+        get_current_room_name(),
+        path,
+        tool="fault_history",
+        query_hash=prompt_hash(equipment_id),
+    ) as span:
+        results = await client.query(
+            index_name,
+            f"job and fault history for {equipment_id}",
+            QueryOptions(
+                top_k=5,
+                alpha=0.5,
+                filter={"field": "type", "condition": {"$eq": "job_history"}},
+            ),
+        )
+        span.set_attribute("fieldline.result_count", len(results.docs))
 
     if not results.docs:
         answer = (
@@ -42,9 +55,6 @@ async def fault_history(context: RunContext, equipment_id: str) -> str:
         lines = [doc.text for doc in results.docs]
         answer = f"Job history for {equipment_id}: " + " ".join(lines)
 
-    # Phase 6: record this Q&A in the company's audit log. Fire-and-forget
-    # -- see audit_log.py for why this never blocks or slows down the
-    # voice response.
     log_tool_call_background("fault_history", equipment_id, answer)
 
     return answer

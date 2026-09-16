@@ -123,6 +123,8 @@ fieldline/
   (`ollama pull llama3.2:3b`) — used for the fully offline LLM fallback
 - A Piper voice model downloaded to `agent/models/` — used for the fully
   offline TTS fallback
+- Arize Phoenix (installed via `uv sync`, no separate account needed) for
+  LLM observability
 
 ## Setup
 
@@ -132,10 +134,13 @@ fieldline/
 cd backend
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install fastapi uvicorn sqlalchemy httpx python-dotenv moss
+pip install fastapi uvicorn sqlalchemy httpx python-dotenv moss python-jose[cryptography] bcrypt slowapi python-multipart
 copy .env.example .env
 # Edit backend\.env and fill in MOSS_PROJECT_ID / MOSS_PROJECT_KEY
 python seed_db.py
+# Also generate a real JWT secret and add it to backend/.env as
+# FIELDLINE_JWT_SECRET=<value> before anything beyond local testing:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 python -m uvicorn main:app --reload --port 8000
 ```
 
@@ -235,3 +240,62 @@ behavior when the backend is briefly unreachable.
 5. Turn Wi-Fi back on — the agent hot-swaps back to the cloud pipeline and
    pushes anything logged offline (job notes, buffered audit entries) back
    to the cloud, with zero restart.
+
+## Observability, security & evaluation (Phase 7)
+
+**LLM observability.** Every pipeline stage (STT, LLM, TTS, Moss retrieval)
+is traced via OpenTelemetry into a locally self-hosted [Arize
+Phoenix](https://phoenix.arize.com/) instance -- correlation id, online/
+offline path, latency, and (for LLM stages) token usage. Run it alongside
+the agent:
+
+```powershell
+cd agent
+uv run python -m phoenix.server.main serve
+```
+
+Open `http://localhost:6006` to watch traces arrive live. Any span that
+busts its path's latency budget (1000ms online / 2500ms offline) gets an
+explicit `latency_threshold_exceeded` event, filterable in Phoenix.
+
+**Prompt engineering.** `agent/PROMPT_ENGINEERING.md` documents the CRISPE
+structure, negative constraints, and few-shot examples behind
+`agent/src/agent.py`'s system prompt.
+
+**API security.** The backend now requires a login for every write
+(create/update/delete). Demo accounts (see `backend/seed_db.py`, password
+`FieldLine123!` for all):
+
+| Company | Username | Role |
+|---|---|---|
+| site-demo | `tech.demo` | technician |
+| site-demo | `supervisor.demo` | supervisor |
+| site-demo | `dispatcher.demo` | dispatcher |
+| acme-elevator | `tech.acme` | technician |
+| acme-elevator | `supervisor.acme` | supervisor |
+| acme-elevator | `dispatcher.acme` | dispatcher |
+
+Roles: **technician** (read + log notes), **supervisor** (+ edit safety
+procedures), **dispatcher** (+ reroute jobs, delete jobs/inventory).
+Requests are also rate-limited (`slowapi`) and Pydantic request models
+enforce explicit length/pattern constraints. Set a real
+`FIELDLINE_JWT_SECRET` in `backend/.env` before deploying anywhere:
+
+```powershell
+cd backend
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+**Requirements traceability.** See `docs/REQUIREMENTS_TRACEABILITY.md` for
+the full FR/NFR matrix mapping every requirement to its implementing
+component and verifying phase.
+
+**Offline evaluation.** `agent/eval/run_ragas_eval.py` runs Ragas
+(faithfulness + context precision) against a fixed golden set, as a
+standalone batch script -- never inline with a live call:
+
+```powershell
+cd agent
+uv sync --group eval
+uv run --group eval python eval/run_ragas_eval.py
+```

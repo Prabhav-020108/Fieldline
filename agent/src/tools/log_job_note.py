@@ -6,7 +6,10 @@ from livekit.agents import RunContext, function_tool
 from moss import DocumentInfo, MutationOptions
 
 from audit_log import log_tool_call_background
+from company_context import get_current_room_name
+from connectivity import connectivity
 from moss_client import get_index
+from tracing import prompt_hash, traced_stage
 
 logger = logging.getLogger("fieldline.log_job_note")
 
@@ -32,7 +35,15 @@ async def log_job_note(context: RunContext, equipment_id: str, note: str) -> str
         metadata={"type": "job_history", "equipment": equipment_id, "status": "note"},
     )
 
-    await client.add_docs(index_name, [doc], MutationOptions(upsert=True))
+    path = "online" if connectivity.is_online else "offline"
+    with traced_stage(
+        "index_write",
+        get_current_room_name(),
+        path,
+        tool="log_job_note",
+        note_hash=prompt_hash(note),
+    ):
+        await client.add_docs(index_name, [doc], MutationOptions(upsert=True))
 
     answer = f"Got it, I've logged that note against {equipment_id}."
 

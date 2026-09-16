@@ -29,7 +29,7 @@ from moss_client import get_index
 # from the room name. See company_context.py for the full explanation of
 # why this uses a ContextVar instead of a function argument threaded
 # through every tool.
-from company_context import company_id_from_room_name, set_current_company
+from company_context import company_id_from_room_name, set_current_company, set_current_room_name
 
 # Phase 6 addition -- every tool call now writes an entry to the
 # company's audit log (see audit_log.py and each tools/*.py file).
@@ -38,22 +38,51 @@ from company_context import company_id_from_room_name, set_current_company
 # background for as long as the session runs.
 from audit_log import flush_all_buffers, start_periodic_flush
 
+# Phase 7 addition -- LLM observability. Importing tracing here (before it's
+# used below) is what triggers Phoenix registration at process startup; see
+# tracing.py's module docstring for the graceful no-op fallback if Phoenix
+# isn't running.
+from tracing import record_stage_span
+
 logger = logging.getLogger("fieldline-agent")
 
 load_dotenv(".env.local")
 
 FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     """\
-    You are FieldLine, a hands-free voice copilot for a field service
-    technician -- electrical maintenance, HVAC, elevator AMC, or telecom
-    tower work. The technician is talking to you through a headset, often
-    with gloved hands, so you are their only interface right now.
+    # Capacity and Role
+    You are FieldLine, an expert hands-free voice dispatch assistant
+    embedded in a field technician's headset -- electrical maintenance,
+    HVAC, elevator AMC, or telecom tower work -- with access to five tools
+    backed by a live semantic index of job history, safety manuals, and
+    inventory records.
 
-    # Output rules
-    - Respond in plain spoken text only. Never use markdown, lists, code,
-      tables, or emojis.
-    - Keep replies short: one to three sentences for ordinary answers.
-    - Spell out numbers and unit IDs clearly (e.g. say "unit twelve", not "12").
+    # Insight
+    The technician's hands and eyes are occupied with physical work,
+    possibly in a noisy room, possibly with no network at all. Every
+    answer may inform a real safety decision. A wrong or invented answer
+    costs more than no answer.
+
+    # Statement
+    Answer only from tool results. Never state a fact about equipment
+    history, a part number, or a safety step that did not come back from a
+    tool call in this conversation. If a tool returns nothing, say so
+    plainly and suggest what to check next -- never guess.
+
+    # Personality
+    Respond in plain spoken text only. Never use markdown, lists, code,
+    tables, or emojis. Keep replies short: one to three sentences for
+    ordinary answers. Spell out numbers and unit IDs clearly (say "unit
+    twelve", not "12"). Calm and direct, the way a competent radio
+    dispatcher sounds.
+
+    # Experiment (handling ambiguity)
+    When a request doesn't give a tool what it needs (no equipment ID for
+    fault_history, no clear topic for safety_procedure, no part name for
+    inventory_lookup), do not ask an open-ended "what do you need help
+    with." Ask for exactly the one missing detail, e.g. "Which unit or
+    equipment ID are you working on?" or "What's the part number or part
+    name?" Keep it to one short question, then proceed with the tool call.
 
     # Tools
     - fault_history: job and fault history for a piece of equipment.
@@ -67,20 +96,18 @@ FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     - log_job_note: logs a voice-dictated note against a job. Confirm back
       what you logged in one short sentence.
 
-    # Guardrails
-    - Never invent equipment history, part numbers, or safety steps that
-      didn't come back from a tool call. If a tool finds nothing, say so
-      plainly instead of guessing.
-    - For anything safety-critical, when in doubt, say so and point the
-      technician to their supervisor rather than proceeding on a guess.
+    # Negative constraints (safety-critical, non-negotiable)
+    - Never paraphrase, summarize, or reorder text returned by
+      safety_procedure -- read it back close to verbatim.
+    - Never answer a lockout/safety question from memory -- always call
+      the tool first, even if you believe you already know the answer.
+    - Never invent a section number, manual name, part number, or job ID
+      not present in a tool result.
+    - On a low-confidence safety_procedure result, say so and refer the
+      technician to a supervisor instead of guessing.
 
-    # When information is missing
-    - If the technician's request doesn't give a tool what it needs (no
-      equipment ID for fault_history, no clear topic for safety_procedure,
-      no part name for inventory_lookup), do not ask an open-ended "what do
-      you need help with." Ask for exactly the one missing detail, e.g.
-      "Which unit or equipment ID are you working on?" or "What's the part
-      number or part name?" Keep it to one short question.
+    See PROMPT_ENGINEERING.md for the full worked examples this structure
+    is built from.
     """
 )
 
@@ -112,6 +139,9 @@ async def entrypoint(ctx: JobContext) -> None:
     # session sees the right company via moss_client.get_index().
     company_id = company_id_from_room_name(ctx.room.name)
     set_current_company(company_id)
+    # Phase 7: same ContextVar pattern, for tracing correlation ids -- see
+    # tracing.py and company_context.py.
+    set_current_room_name(ctx.room.name)
 
     ctx.log_context_fields = {
         "room": ctx.room.name,
@@ -202,6 +232,46 @@ async def entrypoint(ctx: JobContext) -> None:
             preemptive_generation={"enabled": True},
         ),
     )
+
+    # Phase 7: record STT / LLM / TTS / end-of-utterance latency into
+    # Phoenix, using LiveKit's own metrics_collected event rather than
+    # wrapping the SDK calls ourselves. Defensive by design -- see
+    # tracing.py's record_stage_span() and the comment below: LiveKit's
+    # exact metrics field names can drift between versions (same caution
+    # this repo already applies to LiveKit APIs generally -- see
+    # .agents/skills/livekit-agents/references/freshness-rules.md), so
+    # every field is read with getattr() and this handler can never raise
+    # into the voice pipeline.
+    def _on_metrics_collected(ev) -> None:
+        try:
+            m = ev.metrics
+            stage = type(m).__name__  # e.g. "STTMetrics", "LLMMetrics", "TTSMetrics", "EOUMetrics"
+            path = "online" if connectivity.is_online else "offline"
+
+            duration_s = getattr(m, "duration", None)
+            latency_ms = duration_s * 1000 if isinstance(duration_s, (int, float)) else None
+
+            attrs: dict = {}
+            prompt_tokens = getattr(m, "prompt_tokens", None)
+            completion_tokens = getattr(m, "completion_tokens", None)
+            if prompt_tokens is not None:
+                attrs["prompt_tokens"] = prompt_tokens
+            if completion_tokens is not None:
+                attrs["completion_tokens"] = completion_tokens
+
+            # Different metric types call this "ttft" (LLM) or "ttfb" (TTS)
+            # depending on the installed livekit-agents version.
+            time_to_first = getattr(m, "ttft", None)
+            if time_to_first is None:
+                time_to_first = getattr(m, "ttfb", None)
+            if isinstance(time_to_first, (int, float)):
+                attrs["time_to_first_ms"] = time_to_first * 1000
+
+            record_stage_span(stage, ctx.room.name, path, latency_ms, **attrs)
+        except Exception:
+            logger.exception("failed to process metrics_collected event (call was unaffected)")
+
+    session.on("metrics_collected", _on_metrics_collected)
 
     await session.start(
         agent=FieldLineAssistant(llm=build_hybrid_llm(cloud_llm)),

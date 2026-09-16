@@ -1,12 +1,22 @@
 import type { AuditLogEntry, Company, InventoryItem, Job, SafetyProcedure } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const TOKEN_KEY = "fieldline_token";
+
+function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     cache: "no-store",
     ...options,
+    headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
   });
 
   if (!res.ok) {
@@ -27,6 +37,52 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+// ---------------------------------------------------------------------------
+// Auth (Phase 7)
+// ---------------------------------------------------------------------------
+
+export async function login(
+  username: string,
+  password: string
+): Promise<{ access_token: string; token_type: string; role: string; company_id: string }> {
+  const body = new URLSearchParams();
+  body.set("username", username);
+  body.set("password", password);
+
+  const res = await fetch(`${API_BASE}/auth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const errBody = await res.json();
+      if (errBody && typeof errBody.detail === "string") detail = errBody.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || "Login failed.");
+  }
+
+  return await res.json();
+}
+
+export function logout(): void {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export function isLoggedIn(): boolean {
+  return getToken() !== null;
+}
+
+export const getCurrentUser = () =>
+  request<{ username: string; role: string; company_id: string }>("/auth/me");
 
 // ---------------------------------------------------------------------------
 // Companies
@@ -171,7 +227,7 @@ export const deleteSafetyProcedure = (companyId: string, procedureId: string) =>
   });
 
 // ---------------------------------------------------------------------------
-// Audit log (Phase 6)
+// Audit log
 // ---------------------------------------------------------------------------
 
 export const listAuditLog = (companyId: string, limit = 200) =>

@@ -4,7 +4,10 @@ from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
 from audit_log import log_tool_call_background
+from company_context import get_current_room_name
+from connectivity import connectivity
 from moss_client import get_index
+from tracing import traced_stage
 
 logger = logging.getLogger("fieldline.dispatch_status")
 
@@ -19,15 +22,21 @@ async def dispatch_status(context: RunContext) -> str:
     logger.info("dispatch_status lookup")
 
     client, index_name = await get_index()
-    results = await client.query(
-        index_name,
-        "current job queue dispatch status and reroutes",
-        QueryOptions(
-            top_k=5,
-            alpha=0.5,
-            filter={"field": "type", "condition": {"$eq": "dispatch_status"}},
-        ),
-    )
+    path = "online" if connectivity.is_online else "offline"
+
+    with traced_stage(
+        "retrieval", get_current_room_name(), path, tool="dispatch_status"
+    ) as span:
+        results = await client.query(
+            index_name,
+            "current job queue dispatch status and reroutes",
+            QueryOptions(
+                top_k=5,
+                alpha=0.5,
+                filter={"field": "type", "condition": {"$eq": "dispatch_status"}},
+            ),
+        )
+        span.set_attribute("fieldline.result_count", len(results.docs))
 
     if not results.docs:
         answer = "I don't see any dispatch updates right now -- your queue looks unchanged."

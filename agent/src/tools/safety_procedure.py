@@ -5,19 +5,16 @@ from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
 from audit_log import log_tool_call_background
+from company_context import get_current_room_name
+from connectivity import connectivity
 from moss_client import get_index
+from tracing import prompt_hash, traced_stage
 
 logger = logging.getLogger("fieldline.safety_procedure")
 
 # Below this score, do not hand the technician a guess -- send them to a
-# supervisor instead.
-#
-# Phase 6: this is now tunable via SAFETY_CONFIDENCE_FLOOR in .env.local
-# instead of a hardcoded constant (default stays 0.35, matching Phases
-# 2-5), and every safety_procedure call logs its score -- and whether it
-# tripped this floor -- to the audit log below, so a supervisor can review
-# exactly when the agent did and didn't trust its own answer. See
-# audit_log.py and the dashboard's "Audit log" tab.
+# supervisor instead. Tunable via SAFETY_CONFIDENCE_FLOOR in .env.local
+# (default 0.35, matching Phases 2-5).
 CONFIDENCE_FLOOR = float(os.environ.get("SAFETY_CONFIDENCE_FLOOR", "0.35"))
 
 
@@ -37,15 +34,27 @@ async def safety_procedure(context: RunContext, topic: str) -> str:
     logger.info("safety_procedure lookup for %r", topic)
 
     client, index_name = await get_index()
-    results = await client.query(
-        index_name,
-        topic,
-        QueryOptions(
-            top_k=1,
-            alpha=0.25,  # keyword-weighted: exact wording matters for safety text
-            filter={"field": "type", "condition": {"$eq": "safety_manual"}},
-        ),
-    )
+    path = "online" if connectivity.is_online else "offline"
+
+    with traced_stage(
+        "retrieval",
+        get_current_room_name(),
+        path,
+        tool="safety_procedure",
+        query_hash=prompt_hash(topic),
+    ) as span:
+        results = await client.query(
+            index_name,
+            topic,
+            QueryOptions(
+                top_k=1,
+                alpha=0.25,  # keyword-weighted: exact wording matters for safety text
+                filter={"field": "type", "condition": {"$eq": "safety_manual"}},
+            ),
+        )
+        span.set_attribute("fieldline.result_count", len(results.docs))
+        if results.docs:
+            span.set_attribute("fieldline.top_score", results.docs[0].score)
 
     if not results.docs:
         answer = (

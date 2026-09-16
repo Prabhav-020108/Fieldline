@@ -21,6 +21,11 @@ long as set_current_company() runs BEFORE session.start() in entrypoint(),
 every tool call triggered by that session sees the right company -- even
 while a *different* room, for a *different* company, is being served
 concurrently by the same process.
+
+Phase 7 addition: the same pattern, applied to the LiveKit room name, so
+tools/*.py can tag their Moss-retrieval tracing spans (see tracing.py) with
+a correlation id without agent.py having to thread it through every tool
+call by hand.
 """
 
 from contextvars import ContextVar
@@ -35,6 +40,13 @@ _current_company_id: ContextVar[str] = ContextVar(
     "fieldline_current_company_id", default=DEFAULT_COMPANY_ID
 )
 
+# Phase 7: default "console" so ad-hoc console-mode runs and any code that
+# executes before set_current_room_name() is called (e.g. the eval
+# harness) still get a sensible, non-empty correlation id.
+_current_room_name: ContextVar[str] = ContextVar(
+    "fieldline_current_room_name", default="console"
+)
+
 
 def set_current_company(company_id: str) -> None:
     """Call once, at the top of entrypoint(), before session.start()."""
@@ -45,6 +57,20 @@ def get_current_company() -> str:
     """Read from anywhere -- tools never call this directly, but
     moss_client.get_index() does, internally."""
     return _current_company_id.get()
+
+
+def set_current_room_name(room_name: str) -> None:
+    """Phase 7: call once, at the top of entrypoint(), alongside
+    set_current_company(). Gives tracing.py's traced_stage() calls inside
+    tools/*.py a stable correlation_id -- see tracing.py's module
+    docstring for why this is call-level, not turn-level, granularity."""
+    _current_room_name.set(room_name)
+
+
+def get_current_room_name() -> str:
+    """Read from anywhere -- tools call this to tag their retrieval spans
+    with the right correlation id."""
+    return _current_room_name.get()
 
 
 def company_id_from_room_name(room_name: str) -> str:

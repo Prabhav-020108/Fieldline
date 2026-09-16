@@ -4,7 +4,10 @@ from livekit.agents import RunContext, function_tool
 from moss import QueryOptions
 
 from audit_log import log_tool_call_background
+from company_context import get_current_room_name
+from connectivity import connectivity
 from moss_client import get_index
+from tracing import prompt_hash, traced_stage
 
 logger = logging.getLogger("fieldline.inventory_lookup")
 
@@ -20,15 +23,25 @@ async def inventory_lookup(context: RunContext, part_number: str) -> str:
     logger.info("inventory_lookup for %r", part_number)
 
     client, index_name = await get_index()
-    results = await client.query(
-        index_name,
-        f"inventory location for {part_number}",
-        QueryOptions(
-            top_k=3,
-            alpha=0.4,
-            filter={"field": "type", "condition": {"$eq": "inventory"}},
-        ),
-    )
+    path = "online" if connectivity.is_online else "offline"
+
+    with traced_stage(
+        "retrieval",
+        get_current_room_name(),
+        path,
+        tool="inventory_lookup",
+        query_hash=prompt_hash(part_number),
+    ) as span:
+        results = await client.query(
+            index_name,
+            f"inventory location for {part_number}",
+            QueryOptions(
+                top_k=3,
+                alpha=0.4,
+                filter={"field": "type", "condition": {"$eq": "inventory"}},
+            ),
+        )
+        span.set_attribute("fieldline.result_count", len(results.docs))
 
     if not results.docs:
         answer = (

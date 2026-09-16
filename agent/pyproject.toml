@@ -17,6 +17,9 @@ dependencies = [
     "piper-tts>=1.3.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
+    "arize-phoenix",
+    "arize-phoenix-otel",
+    "openinference-instrumentation-openai",
 ]
 
 [dependency-groups]
@@ -24,6 +27,16 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
+]
+# Phase 7f: only needed to run the offline Ragas evaluation harness
+# (eval/run_ragas_eval.py). Kept as its own group since it pulls in a
+# heavier dependency tree (datasets, langchain) that the live agent never
+# needs. Install with: uv sync --group eval
+eval = [
+    "ragas",
+    "datasets",
+    "pandas",
+    "langchain-openai",
 ]
 
 [tool.uv]
