@@ -27,9 +27,8 @@ it again for either of those -- just re-run this script.
 """
 
 from auth import hash_password
-from models import Company, InventoryItem, Job, SafetyProcedure, SessionLocal, User, init_db
+from models import Company, InventoryItem, Job, SafetyProcedure, SessionLocal, User
 
-init_db()
 db = SessionLocal()
 
 # ---------------------------------------------------------------------------

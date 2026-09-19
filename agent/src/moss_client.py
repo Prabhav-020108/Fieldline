@@ -1,5 +1,7 @@
 """
 Shared Moss client for the FieldLine agent -- Phase 5, multi-tenant.
+Phase 8d update: a failed or offline cloud write is now queued via
+sync_queue.py for retry, instead of being silently dropped.
 
 Phase 3 (online path): every tool queried a single hardcoded Moss cloud
 index ("site-demo") directly.
@@ -7,34 +9,27 @@ index ("site-demo") directly.
 Phase 4 (offline-first): added a local, in-process fallback session
 (_LocalSession, keyword search) hydrated from static seed JSON files, plus
 a MossRouter that switches between the cloud client and the local session
-based on connectivity.is_online -- see connectivity.py.
+based on connectivity.is_online.
 
-Phase 5 (this file, multi-tenant): "site-demo" is no longer the only
-customer. Every call now belongs to a specific company, and each company
-gets its OWN Moss index (see the Phase 5 build plan's "index-per-tenant"
-section) and its own local session, so two companies can never see each
-other's job history or safety procedures.
+Phase 5 (multi-tenant): every call belongs to a specific company, and
+each company gets its own Moss index and its own local session.
 
 get_index() keeps the EXACT same public signature it always had --
 `await get_index()`, no arguments -- so fault_history.py, safety_procedure.py,
 inventory_lookup.py, dispatch_status.py, and log_job_note.py do not change
-at all for Phase 5. The company a call belongs to is read from
-company_context.get_current_company(), a contextvars.ContextVar that
-agent.py sets once, at the very top of entrypoint(), from the room name --
-see company_context.py for the full explanation.
+at all. The company a call belongs to is read from
+company_context.get_current_company().
 
 Company metadata (which Moss index a company uses) comes from the FastAPI
-backend built in Phase 5 (backend/main.py's GET /companies/{id}), not from
-a hardcoded constant. The local session's documents come from that same
-backend's GET /companies/{id}/export instead of the fixed data/seed/*.json
-files used in Phase 4 -- see hydrate_session() below.
+backend, not a hardcoded constant. The local session's documents come
+from that same backend's export endpoint instead of the fixed
+data/seed/*.json files used in Phase 4.
 
 Backward-compatible fallback: if the backend is unreachable AND the
 company is the original "site-demo" demo company, this falls back to the
-exact Phase 4 behaviour (hardcoded index name "site-demo", local seed JSON
-files), so your most-rehearsed demo path still works even with the FastAPI
-backend not running. Any OTHER company without a reachable backend gets an
-empty local session and a clear log warning instead of a crash.
+Phase 4 behaviour (hardcoded index name "site-demo", local seed JSON
+files). Any OTHER company without a reachable backend gets an empty local
+session and a clear log warning instead of a crash.
 """
 
 import asyncio
@@ -45,14 +40,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from moss import DocumentInfo, MossClient
+from moss import DocumentInfo, MossClient, MutationOptions
 
 from company_context import DEFAULT_COMPANY_ID, get_current_company
 from connectivity import connectivity
+from settings import settings
+import sync_queue
 
 logger = logging.getLogger("fieldline.moss_client")
 
-BACKEND_URL = os.environ.get("FIELDLINE_BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = settings.fieldline_backend_url
 
 # data/seed/ lives at the repo root, two levels up from agent/src/. Only
 # used as a fallback for the default "site-demo" company if the backend is
@@ -85,9 +82,7 @@ class _LocalResults:
 class _LocalSession:
     """In-memory keyword search fallback -- no Moss, no embeddings, no
     network. One instance per company; see MossRouter / _get_session
-    below. Unchanged from Phase 4 other than now living inside a
-    per-company cache instead of a single global.
-    """
+    below."""
 
     def __init__(self) -> None:
         self._docs: list[_LocalDoc] = []
@@ -146,17 +141,19 @@ class _LocalSession:
 
 class MossRouter:
     """Drop-in stand-in for MossClient, from every tool's point of view --
-    now scoped to exactly one company.
+    scoped to exactly one company.
 
     Tools do:
         client, index_name = await get_index()
         results = await client.query(index_name, text, options)
 
-    Underneath, queries always go to this company's local keyword-search
-    session (see the module docstring above for why the cloud query path
-    is skipped for this custom-embeddings index); add_docs() writes to the
-    cloud index when online and mirrors into the local session, or writes
-    to the local session only when offline.
+    Queries always go to this company's local keyword-search session (see
+    the module docstring for why the cloud query path is skipped for this
+    custom-embeddings index). add_docs() always writes to the local
+    session immediately (so an offline read sees the note right away),
+    then either pushes to the cloud index right now (if online) or queues
+    that push via sync_queue for retry -- see the module-level
+    _sync_queue_moss_handler below.
     """
 
     def __init__(self, company_id: str, index_name: str, cloud_client: MossClient) -> None:
@@ -171,21 +168,35 @@ class MossRouter:
         return await session.query(text, options)
 
     async def add_docs(self, index_name: str, docs, mutation_options=None):
+        session = await self._get_session()
+        # Always write to the local session immediately -- offline reads
+        # must see this note/document right away, regardless of whether
+        # the cloud push below succeeds this instant or gets queued.
+        await session.add_docs(docs)
+
         if connectivity.is_online:
             try:
-                result = await self._cloud_client.add_docs(index_name, docs, mutation_options)
-                session = await self._get_session()
-                await session.add_docs(docs)
-                return result
+                return await self._cloud_client.add_docs(index_name, docs, mutation_options)
             except Exception:
                 logger.exception(
-                    "cloud add_docs failed for company %s -- logging to local session only",
+                    "cloud add_docs failed for company %s -- queuing for retry "
+                    "via sync_queue instead of losing the write",
                     self.company_id,
                 )
                 connectivity.mark_offline()
 
-        session = await self._get_session()
-        return await session.add_docs(docs)
+        # Offline (either already, or just detected above): queue the
+        # cloud push for retry instead of losing it -- see sync_queue.py.
+        await sync_queue.enqueue(
+            op_type="moss_add_docs",
+            company_id=self.company_id,
+            payload={
+                "index_name": index_name,
+                "docs": [{"id": d.id, "text": d.text, "metadata": d.metadata} for d in docs],
+            },
+            idempotency_key=f"moss-add-docs-{self.company_id}-{'-'.join(d.id for d in docs)}",
+        )
+        return None
 
     async def _get_session(self) -> _LocalSession:
         async with self._session_lock:
@@ -205,14 +216,9 @@ async def hydrate_session(company_id: str, index_name: str) -> _LocalSession:
     status for ONE company into a local in-memory session, so tool calls
     can answer with the network fully off.
 
-    Phase 5: reads from the FastAPI backend's per-company export endpoint
-    instead of the fixed data/seed/*.json files used in Phase 4, since
-    every company now has its own rows in backend/db.sqlite3. Falls back
-    to the original Phase 4 seed-file behaviour ONLY for the default
-    "site-demo" company, and only if the backend can't be reached -- so
-    your original, most-rehearsed demo path never breaks even if you
-    forget to start `uvicorn main:app`.
-    """
+    Reads from the FastAPI backend's per-company export endpoint. Falls
+    back to the original Phase 4 seed-file behaviour ONLY for the default
+    "site-demo" company, and only if the backend can't be reached."""
     session = _LocalSession()
     docs: list[DocumentInfo] = []
 
@@ -236,9 +242,8 @@ async def hydrate_session(company_id: str, index_name: str) -> _LocalSession:
             logger.warning(
                 "could not reach FastAPI backend at %s -- falling back to "
                 "the original Phase 4 seed files for the default demo "
-                "company. Start the backend (`uv run uvicorn main:app "
-                "--reload --port 8000` from backend/) to use live, "
-                "dashboard-edited data instead.",
+                "company. Start the backend to use live, dashboard-edited "
+                "data instead.",
                 BACKEND_URL,
             )
             for filename in SEED_FILES:
@@ -254,8 +259,7 @@ async def hydrate_session(company_id: str, index_name: str) -> _LocalSession:
             logger.exception(
                 "could not reach FastAPI backend at %s to hydrate company "
                 "%r -- this company will have no indexed data until the "
-                "backend is reachable. Start it with `uv run uvicorn "
-                "main:app --reload --port 8000` from backend/.",
+                "backend is reachable.",
                 BACKEND_URL,
                 company_id,
             )
@@ -276,8 +280,7 @@ async def _fetch_company_config(company_id: str) -> dict:
     """Ask the FastAPI backend which Moss index this company uses. Falls
     back to the Phase 4 default for "site-demo" if the backend can't be
     reached, and to a predictable f"company-{company_id}" guess for any
-    other company (so a brand-new company still resolves to *something*
-    even if the backend happens to be down for a moment)."""
+    other company."""
     try:
         async with httpx.AsyncClient(timeout=10) as http_client:
             resp = await http_client.get(f"{BACKEND_URL}/companies/{company_id}")
@@ -297,8 +300,7 @@ async def _fetch_company_config(company_id: str) -> dict:
 async def get_index() -> tuple[MossRouter, str]:
     """Return a router for the CURRENT company -- the one set by
     company_context.set_current_company() at the top of agent.py's
-    entrypoint() for this call. Every tool calls this exactly as it did in
-    Phase 3 and 4, with zero arguments; nothing in tools/*.py changes."""
+    entrypoint() for this call."""
     global _routers_lock
 
     company_id = get_current_company()
@@ -312,9 +314,7 @@ async def get_index() -> tuple[MossRouter, str]:
             config = await _fetch_company_config(company_id)
             index_name = config.get("moss_index_name") or f"company-{company_id}"
 
-            project_id = os.environ["MOSS_PROJECT_ID"]
-            project_key = os.environ["MOSS_PROJECT_KEY"]
-            cloud_client = MossClient(project_id, project_key)
+            cloud_client = MossClient(settings.moss_project_id, settings.moss_project_key)
             try:
                 await cloud_client.load_index(index_name)
             except Exception:
@@ -332,3 +332,35 @@ async def get_index() -> tuple[MossRouter, str]:
             _routers[company_id] = router
 
     return router, router.index_name
+
+
+# ---------------------------------------------------------------------------
+# Phase 8d: sync_queue handler for a queued cloud write
+# ---------------------------------------------------------------------------
+
+async def _sync_queue_moss_handler(company_id: str, payload: dict) -> bool:
+    """Registered with sync_queue below -- replays one queued Moss cloud
+    write. Reuses whatever router is already cached for this company, or
+    resolves one fresh if the agent process restarted since the write was
+    queued."""
+    router = _routers.get(company_id)
+    if router is None:
+        config = await _fetch_company_config(company_id)
+        index_name = config.get("moss_index_name") or f"company-{company_id}"
+        cloud_client = MossClient(settings.moss_project_id, settings.moss_project_key)
+        router = MossRouter(company_id, index_name, cloud_client)
+        _routers[company_id] = router
+
+    docs = [
+        DocumentInfo(id=d["id"], text=d["text"], metadata=d.get("metadata", {}))
+        for d in payload["docs"]
+    ]
+    try:
+        await router._cloud_client.add_docs(payload["index_name"], docs, MutationOptions(upsert=True))
+        return True
+    except Exception:
+        logger.exception("retry of queued Moss write failed for company %r", company_id)
+        return False
+
+
+sync_queue.register_handler("moss_add_docs", _sync_queue_moss_handler)

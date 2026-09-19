@@ -20,13 +20,13 @@ time you won't need to run this by hand at all.
 """
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 from moss import DocumentInfo, MossClient, MutationOptions
 
 from document_builder import dispatch_queue_doc, inventory_to_doc, job_to_doc, safety_to_doc
 from models import Company, InventoryItem, Job, SafetyProcedure, SessionLocal
+from settings import settings
 
 load_dotenv()
 
@@ -36,7 +36,7 @@ _client: MossClient | None = None
 def _get_client() -> MossClient:
     global _client
     if _client is None:
-        _client = MossClient(os.environ["MOSS_PROJECT_ID"], os.environ["MOSS_PROJECT_KEY"])
+        _client = MossClient(settings.moss_project_id, settings.moss_project_key)
     return _client
 
 

@@ -3,6 +3,12 @@ import logging
 import textwrap
 
 from dotenv import load_dotenv
+
+# Load .env.local FIRST, before any local module below is imported --
+# several of them (settings.py, and anything that imports it) now read
+# required env vars at import time, and need this to have already run.
+load_dotenv(".env.local")
+
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -26,27 +32,28 @@ from local_pipeline import build_hybrid_llm, build_hybrid_stt, build_hybrid_tts,
 from moss_client import get_index
 
 # Phase 5 addition -- multi-tenant company identity, resolved once per call
-# from the room name. See company_context.py for the full explanation of
-# why this uses a ContextVar instead of a function argument threaded
-# through every tool.
-from company_context import company_id_from_room_name, set_current_company, set_current_room_name
+# from the room name.
+from company_context import (
+    company_id_from_room_name,
+    set_current_company,
+    set_current_role,
+    set_current_room_name,
+)
 
-# Phase 6 addition -- every tool call now writes an entry to the
-# company's audit log (see audit_log.py and each tools/*.py file).
-# flush_all_buffers() catches up on anything logged while the backend was
-# unreachable; start_periodic_flush() keeps retrying that catch-up in the
-# background for as long as the session runs.
-from audit_log import flush_all_buffers, start_periodic_flush
+# Phase 8d addition -- one shared, durable, retrying outbound queue for
+# audit-log entries and queued Moss writes. Importing audit_log and
+# moss_client above already registers their sync_queue handlers; this
+# import is just for sync_queue.start() below.
+import sync_queue
 
-# Phase 7 addition -- LLM observability. Importing tracing here (before it's
-# used below) is what triggers Phoenix registration at process startup; see
-# tracing.py's module docstring for the graceful no-op fallback if Phoenix
-# isn't running.
+# Phase 8c addition -- offline-capable role verification.
+from role_cache import verify_role_token
+from settings import settings
+
+# Phase 7 addition -- LLM observability.
 from tracing import record_stage_span
 
 logger = logging.getLogger("fieldline-agent")
-
-load_dotenv(".env.local")
 
 FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     """\
@@ -84,6 +91,12 @@ FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     equipment ID are you working on?" or "What's the part number or part
     name?" Keep it to one short question, then proceed with the tool call.
 
+    # State Awareness
+    When your connectivity state changes -- online to offline, or back --
+    say so once, briefly, before continuing with the technician's actual
+    question. Never mention it again mid-conversation unless it changes
+    again.
+
     # Tools
     - fault_history: job and fault history for a piece of equipment.
     - safety_procedure: lockout / safety procedures. SAFETY-CRITICAL -- read
@@ -93,8 +106,10 @@ FIELDLINE_INSTRUCTIONS = textwrap.dedent(
       supervisor instead of guessing.
     - inventory_lookup: where a spare part is stored and how many are in stock.
     - dispatch_status: current job queue and any reroutes from dispatch.
-    - log_job_note: logs a voice-dictated note against a job. Confirm back
-      what you logged in one short sentence.
+    - log_job_note: logs a voice-dictated note against a job. If the
+      technician says the job is done or resolved, pass that along -- the
+      tool itself decides whether their role is allowed to close it.
+      Confirm back what you logged in one short sentence.
 
     # Negative constraints (safety-critical, non-negotiable)
     - Never paraphrase, summarize, or reorder text returned by
@@ -132,15 +147,8 @@ server = AgentServer()
 
 @server.rtc_session(agent_name="fieldline-agent")
 async def entrypoint(ctx: JobContext) -> None:
-    # Phase 5: work out which company this call belongs to from the room
-    # name (rooms are named "fieldline-<company_id>" by the dashboard /
-    # whatever creates the room -- see company_context.py). This MUST run
-    # before session.start() below, so every tool call triggered by this
-    # session sees the right company via moss_client.get_index().
     company_id = company_id_from_room_name(ctx.room.name)
     set_current_company(company_id)
-    # Phase 7: same ContextVar pattern, for tracing correlation ids -- see
-    # tracing.py and company_context.py.
     set_current_room_name(ctx.room.name)
 
     ctx.log_context_fields = {
@@ -149,26 +157,15 @@ async def entrypoint(ctx: JobContext) -> None:
     }
 
     # Phase 4: hydrate the local Moss SessionIndex and start the
-    # connectivity monitor *before* the call starts, so the first offline
-    # query during a live conversation never has to wait on either one.
-    # Phase 5: get_index() now hydrates THIS company's session, using the
-    # company_id set just above.
+    # connectivity monitor *before* the call starts.
     await get_index()
     connectivity.start()
 
-    # Phase 6: flush any audit-log entries buffered from a previous run
-    # (e.g. this process was restarted while offline, so the normal
-    # offline -> online transition that triggers connectivity's
-    # on_reconnect hook never fired), then keep retrying that flush every
-    # 30s for the life of this session -- see audit_log.py.
-    asyncio.create_task(flush_all_buffers())
-    start_periodic_flush()
+    # Phase 8d: catch up on anything queued from a previous run, keep
+    # retrying every 30s for the life of this session, and hot-swap back
+    # the instant real connectivity returns -- see sync_queue.py.
+    sync_queue.start()
 
-    # Phase 4: warm faster-whisper's model into the local cache now, while
-    # we still have network -- otherwise the first time it's actually
-    # needed (i.e. the moment you go offline) it tries to download itself
-    # and fails with no internet to do it. Runs in the background so it
-    # doesn't delay the greeting; give it ~10-20s before testing Wi-Fi-off.
     async def _warm_up_stt() -> None:
         try:
             await asyncio.get_event_loop().run_in_executor(None, warm_up_local_stt)
@@ -182,15 +179,11 @@ async def entrypoint(ctx: JobContext) -> None:
 
     asyncio.create_task(_warm_up_stt())
 
-    # Phase 4: warm Ollama's model into RAM now so the first offline LLM call
-    # doesn't pay the 15-30s cold-start penalty (loading 2GB from disk).
-    # The ping is fire-and-forget; failures are logged but never fatal.
     async def _warm_up_llm() -> None:
         try:
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as c:
-                await c.get("http://localhost:11434/api/tags")  # just check it's up
-            # Send a trivial generation to load the model weights into VRAM/RAM
+                await c.get("http://localhost:11434/api/tags")
             from local_pipeline import build_local_llm
             from livekit.agents.llm import ChatContext
             _warm_llm = build_local_llm()
@@ -201,7 +194,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 async for chunk in stream:
                     if chunk.delta and chunk.delta.content:
                         full += chunk.delta.content
-                        break   # just need the first token; model is now hot
+                        break
             logger.info("Ollama warm-up complete -- local LLM ready for offline use")
         except Exception:
             logger.warning(
@@ -212,7 +205,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     asyncio.create_task(_warm_up_llm())
 
-    # Cloud providers -- unchanged from Phase 3.
     cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
     cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
     cloud_tts = inference.TTS(
@@ -220,10 +212,6 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     session = AgentSession(
-        # Phase 4: each of these tries the cloud provider first and falls
-        # back automatically to the local one (faster-whisper / Ollama /
-        # Piper) on a real failure -- see local_pipeline.py. They also
-        # auto-recover back to cloud once it's healthy again.
         stt=build_hybrid_stt(cloud_stt),
         tts=build_hybrid_tts(cloud_tts),
         turn_handling=TurnHandlingOptions(
@@ -233,19 +221,43 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    # Phase 7: record STT / LLM / TTS / end-of-utterance latency into
-    # Phoenix, using LiveKit's own metrics_collected event rather than
-    # wrapping the SDK calls ourselves. Defensive by design -- see
-    # tracing.py's record_stage_span() and the comment below: LiveKit's
-    # exact metrics field names can drift between versions (same caution
-    # this repo already applies to LiveKit APIs generally -- see
-    # .agents/skills/livekit-agents/references/freshness-rules.md), so
-    # every field is read with getattr() and this handler can never raise
-    # into the voice pipeline.
+    # Phase 8f: tell the technician, once, briefly, whenever the
+    # connectivity path actually changes -- never silently. Both handlers
+    # only fire on a genuine transition (connectivity.py's
+    # mark_offline()/mark_online() already de-duplicate this).
+    async def _announce_offline() -> None:
+        try:
+            await session.generate_reply(
+                instructions=(
+                    "Briefly tell the technician you've lost connection and "
+                    "are now running on local data -- one short sentence, "
+                    "e.g. 'Heads up, I've lost signal, running offline now "
+                    "-- inventory and job history might be a few minutes "
+                    "stale until I reconnect.' Then continue normally."
+                )
+            )
+        except Exception:
+            logger.exception("failed to announce offline transition (call was unaffected)")
+
+    async def _announce_reconnect() -> None:
+        try:
+            await session.generate_reply(
+                instructions=(
+                    "Briefly tell the technician you're back online -- one "
+                    "short sentence, e.g. 'Good news, I'm back online.' "
+                    "Then continue normally."
+                )
+            )
+        except Exception:
+            logger.exception("failed to announce reconnect (call was unaffected)")
+
+    connectivity.on_disconnect(_announce_offline)
+    connectivity.on_reconnect(_announce_reconnect)
+
     def _on_metrics_collected(ev) -> None:
         try:
             m = ev.metrics
-            stage = type(m).__name__  # e.g. "STTMetrics", "LLMMetrics", "TTSMetrics", "EOUMetrics"
+            stage = type(m).__name__
             path = "online" if connectivity.is_online else "offline"
 
             duration_s = getattr(m, "duration", None)
@@ -259,8 +271,6 @@ async def entrypoint(ctx: JobContext) -> None:
             if completion_tokens is not None:
                 attrs["completion_tokens"] = completion_tokens
 
-            # Different metric types call this "ttft" (LLM) or "ttfb" (TTS)
-            # depending on the installed livekit-agents version.
             time_to_first = getattr(m, "ttft", None)
             if time_to_first is None:
                 time_to_first = getattr(m, "ttfb", None)
@@ -280,8 +290,26 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await ctx.connect()
 
+    # Phase 8c: verify the calling participant's role token locally (no
+    # network call -- see role_cache.py) and stash the verified role for
+    # the rest of this call. Wrapped defensively: any failure here (no
+    # participant, a bad token, taking too long) falls back to
+    # "technician" -- least privilege -- rather than blocking the call.
+    try:
+        participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=10.0)
+        role = verify_role_token(participant.metadata, settings.fieldline_jwt_secret, company_id)
+    except Exception:
+        logger.warning(
+            "could not read a call-role token from the connecting participant "
+            "-- continuing as 'technician' (least privilege)",
+            exc_info=True,
+        )
+        role = "technician"
+    set_current_role(role)
+    logger.info("call role for this session: %s", role)
+
     # Short audible greeting so you can confirm the pipeline is live before
-    # asking anything -- easy sanity check for both Phase 3 and Phase 4.
+    # asking anything.
     await session.generate_reply(
         instructions=(
             "Greet the technician briefly, e.g. 'FieldLine here, go ahead.' "

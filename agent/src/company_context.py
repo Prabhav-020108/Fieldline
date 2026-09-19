@@ -85,3 +85,22 @@ def company_id_from_room_name(room_name: str) -> str:
         if candidate:
             return candidate
     return DEFAULT_COMPANY_ID
+
+
+# Phase 8c: verified call role, resolved once per call from the LiveKit
+# participant's metadata (see agent.py's entrypoint() and role_cache.py).
+# Defaults to "technician" -- least privilege -- for console mode and any
+# path that never calls set_current_role().
+_current_role: ContextVar[str] = ContextVar("fieldline_current_role", default="technician")
+
+
+def set_current_role(role: str) -> None:
+    """Call once, at the top of entrypoint(), right after the calling
+    participant's role token has been verified."""
+    _current_role.set(role)
+
+
+def get_current_role() -> str:
+    """Read from anywhere -- tools call this to gate a role-restricted
+    action, e.g. log_job_note's mark_resolved parameter."""
+    return _current_role.get()

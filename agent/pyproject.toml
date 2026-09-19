@@ -20,6 +20,8 @@ dependencies = [
     "arize-phoenix",
     "arize-phoenix-otel",
     "openinference-instrumentation-openai",
+    "python-jose[cryptography]>=3.3.0",
+    "pydantic-settings>=2.0.0",
 ]
 
 [dependency-groups]

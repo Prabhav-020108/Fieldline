@@ -60,12 +60,10 @@ from starlette.responses import JSONResponse
 import auth
 import moss_sync
 from document_builder import dispatch_queue_doc, dispatch_reroute_doc, inventory_to_doc, job_to_doc, safety_to_doc
-from models import AuditLogEntry, Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, User, init_db
+from models import AuditLogEntry, Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, User
 
 logger = logging.getLogger("fieldline.backend")
 logging.basicConfig(level=logging.INFO)
-
-init_db()
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -355,6 +353,21 @@ async def sync_company_now(
         db.close()
     count = await moss_sync.sync_company(company_id)
     return {"synced_documents": count}
+
+
+@app.post("/companies/{company_id}/call-role-token")
+@limiter.limit("30/minute")
+def issue_call_role_token(
+    request: Request, company_id: str, user: dict = Depends(auth.get_current_user)
+):
+    """Phase 8c: minted right before the dashboard starts a voice call and
+    carried as the joining participant's LiveKit metadata. The agent
+    verifies it locally, with no network call -- see
+    agent/src/role_cache.py -- so the role check still works for the rest
+    of the call even if the network drops the instant after this."""
+    auth.require_same_company(user, company_id)
+    token = auth.create_call_role_token(company_id=company_id, role=user["role"])
+    return {"token": token, "role": user["role"]}
 
 
 @app.get("/companies/{company_id}/export")

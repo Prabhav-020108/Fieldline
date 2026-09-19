@@ -14,7 +14,8 @@ import {
 } from "@livekit/components-react";
 import { PhoneOff, Radio } from "lucide-react";
 
-import { Button, Spinner } from "@/components/ui";
+import { getCallRoleToken, isLoggedIn } from "@/lib/api";
+import { Badge, Button, Spinner } from "@/components/ui";
 
 interface ConnectionDetails {
   token: string;
@@ -31,6 +32,7 @@ export default function CallPage() {
 function CallPageInner({ companyId }: { companyId: string }) {
   const roomName = `fieldline-${companyId}`;
   const [details, setDetails] = useState<ConnectionDetails | null>(null);
+  const [activeRole, setActiveRole] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,12 +41,29 @@ function CallPageInner({ companyId }: { companyId: string }) {
     setError(null);
     try {
       const identity = `dispatcher-${Math.random().toString(36).slice(2, 8)}`;
-      const res = await fetch(
-        `/api/livekit-token?room=${encodeURIComponent(roomName)}&identity=${identity}`
-      );
+      let roleToken: string | null = null;
+      let role: string | null = null;
+
+      if (isLoggedIn()) {
+        try {
+          const result = await getCallRoleToken(companyId);
+          roleToken = result.token;
+          role = result.role;
+        } catch {
+          // Session likely expired -- the call still starts, just without
+          // elevated permissions. The agent treats a missing token as
+          // least-privilege ("technician").
+        }
+      }
+
+      const params = new URLSearchParams({ room: roomName, identity });
+      if (roleToken) params.set("roleToken", roleToken);
+
+      const res = await fetch(`/api/livekit-token?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not get a call token.");
       setDetails(data as ConnectionDetails);
+      setActiveRole(role);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the call.");
     } finally {
@@ -52,7 +71,10 @@ function CallPageInner({ companyId }: { companyId: string }) {
     }
   };
 
-  const endCall = () => setDetails(null);
+  const endCall = () => {
+    setDetails(null);
+    setActiveRole(null);
+  };
 
   return (
     <div>
@@ -76,6 +98,7 @@ function CallPageInner({ companyId }: { companyId: string }) {
           <p className="text-xs text-[var(--ink-faint)] max-w-sm text-center">
             Needs the agent running (<code className="font-mono">uv run python src/agent.py dev</code>)
             and LiveKit credentials in <code className="font-mono">dashboard/.env.local</code>.
+            {!isLoggedIn() ? " Sign in from the sidebar first for supervisor/dispatcher permissions on this call." : null}
           </p>
         </div>
       ) : (
@@ -87,7 +110,7 @@ function CallPageInner({ companyId }: { companyId: string }) {
           onDisconnected={endCall}
           className="bg-[var(--surface)] border border-[var(--line)] rounded-[var(--radius-lg)] p-8"
         >
-          <CallPanel onEndCall={endCall} />
+          <CallPanel onEndCall={endCall} role={activeRole} />
           <RoomAudioRenderer />
         </LiveKitRoom>
       )}
@@ -95,7 +118,7 @@ function CallPageInner({ companyId }: { companyId: string }) {
   );
 }
 
-function CallPanel({ onEndCall }: { onEndCall: () => void }) {
+function CallPanel({ onEndCall, role }: { onEndCall: () => void; role: string | null }) {
   const { state, audioTrack, agentTranscriptions } = useVoiceAssistant();
 
   const stateLabel: Record<string, string> = {
@@ -114,6 +137,9 @@ function CallPanel({ onEndCall }: { onEndCall: () => void }) {
         <p className="text-sm font-medium text-[var(--ink-muted)]">
           {stateLabel[state ?? ""] ?? "Connecting to agent..."}
         </p>
+        {role ? (
+          <Badge tone={role === "technician" ? "neutral" : "brand"}>Connected as {role}</Badge>
+        ) : null}
         <div className="flex items-center gap-3">
           <TrackToggle
             source={Track.Source.Microphone}

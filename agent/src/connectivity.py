@@ -12,11 +12,17 @@ log_job_note all go through moss_client.py, which needs an explicit mode
 flag to know whether to query the cloud index or the local SessionIndex.
 That flag is `connectivity.is_online`.
 
+Phase 8f: added on_disconnect(), symmetric with on_reconnect(), so
+agent.py can have the assistant briefly tell the technician when it's
+dropped to (or recovered from) the offline path -- one of the specific
+gaps Dr. Agent's Phase 7 evaluation flagged.
+
 Usage:
     from connectivity import connectivity
 
     connectivity.start()                          # once, at agent startup
-    connectivity.on_reconnect(some_async_fn)       # optional, see moss_client.py
+    connectivity.on_reconnect(some_async_fn)       # optional
+    connectivity.on_disconnect(some_async_fn)      # optional
     if connectivity.is_online:
         ...
     connectivity.mark_offline()                    # call when a cloud call fails
@@ -51,6 +57,9 @@ class ConnectivityMonitor:
         self._last_change = 0.0
         self._task: asyncio.Task | None = None
         self._on_reconnect_callbacks: list[Callable[[], Awaitable[None]]] = []
+        # Phase 8f: symmetric with on_reconnect -- see agent.py's
+        # _announce_offline().
+        self._on_disconnect_callbacks: list[Callable[[], Awaitable[None]]] = []
 
     def start(self) -> None:
         """Begin the background connectivity poll. Safe to call more than
@@ -67,9 +76,15 @@ class ConnectivityMonitor:
     def on_reconnect(self, callback: Callable[[], Awaitable[None]]) -> None:
         """Register an async callback to fire (in the background, without
         blocking whatever caused the reconnect) the moment we flip from
-        offline back to online. moss_client.py uses this to push locally
-        logged notes and re-enable the cloud index's auto-refresh."""
+        offline back to online."""
         self._on_reconnect_callbacks.append(callback)
+
+    def on_disconnect(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Register an async callback to fire the moment we flip from
+        online to offline. agent.py uses this to have the assistant tell
+        the technician, once, briefly, that it's dropped to the offline
+        path."""
+        self._on_disconnect_callbacks.append(callback)
 
     def mark_online(self) -> None:
         was_offline = not self.is_online
@@ -82,10 +97,14 @@ class ConnectivityMonitor:
                 asyncio.create_task(callback())
 
     def mark_offline(self) -> None:
-        if self.is_online:
+        was_online = self.is_online
+        if was_online:
             logger.warning("connectivity: went OFFLINE")
         self.is_online = False
         self._last_change = time.monotonic()
+        if was_online:
+            for callback in self._on_disconnect_callbacks:
+                asyncio.create_task(callback())
 
     async def _poll_loop(self) -> None:
         loop = asyncio.get_event_loop()

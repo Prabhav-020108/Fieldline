@@ -118,6 +118,11 @@ export const syncCompanyNow = (companyId: string) =>
     method: "POST",
   });
 
+export const getCallRoleToken = (companyId: string) =>
+  request<{ token: string; role: string }>(`/companies/${companyId}/call-role-token`, {
+    method: "POST",
+  });
+
 // ---------------------------------------------------------------------------
 // Jobs
 // ---------------------------------------------------------------------------

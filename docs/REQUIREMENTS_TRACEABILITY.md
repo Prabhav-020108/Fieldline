@@ -35,3 +35,15 @@ same rigor as the repo.
 - **NFR-07 (TLS):** handled automatically by Vercel/Render at the edge once deployed — nothing to hand-build, but was previously undocumented rather than unimplemented.
 - **NFR-11 (encryption at rest):** SQLite has no built-in encryption at rest. The stated plan is to migrate to a managed Postgres provider (e.g. Supabase, which encrypts at rest by default) before any real-world pilot — a scoped roadmap item, not a rushed SQLCipher change days before the deadline.
 - **Agent → backend audit-log authentication:** intentionally left open (see `backend/main.py`'s module docstring) since it's a machine-to-machine call from the trusted agent process, not a browser action. A static service credential is the natural next step.
+
+## Phase 8 additions
+
+| ID | Requirement | Acceptance criteria | Component | Verified by |
+|---|---|---|---|---|
+| NFR-11 | Encryption at rest | Postgres data encrypted at rest by the managed provider, AES-256, on by default | Supabase | Phase 8a |
+| NFR-12 | Schema migrations | Every schema change ships as an Alembic revision; `alembic upgrade head` is idempotent | `backend/migrations/` | Phase 8a |
+| NFR-13 | Secrets management | Startup fails immediately if a required secret is missing; no secret value is hardcoded or defaulted in production | `settings.py` (both services) | Phase 8b |
+| NFR-14 | Offline RBAC | A role check for a gated action never requires a network call; an invalid/expired/tampered token is treated as least-privilege | `agent/src/role_cache.py` | Phase 8c |
+| NFR-15 | Sync protocol | A failed sync attempt retries with exponential backoff and jitter; a repeated idempotency key is never applied twice | `agent/src/sync_queue.py` | Phase 8d |
+| NFR-16 | Edge hardware requirements | Min/recommended RAM, quantization, and acceleration path stated per offline-path component | `docs/EDGE_HARDWARE_REQUIREMENTS.md` | Phase 8e |
+| NFR-17 | Connectivity-state awareness | The agent states an online/offline transition exactly once, before answering the technician's next question | `connectivity.py`'s `on_disconnect`/`on_reconnect` + `agent.py` | Phase 8f |

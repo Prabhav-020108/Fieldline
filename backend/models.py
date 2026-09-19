@@ -7,15 +7,17 @@ Phase 7: User -- login accounts for the dashboard's JWT auth + RBAC (see
 backend/auth.py). Brand new table, so no need to delete db.sqlite3;
 SQLAlchemy's create_all() just adds it alongside your existing data.
 
-NOTE ON MIGRATING AN EXISTING db.sqlite3 (only relevant if you're changing
-an EXISTING column, not adding a new table): SQLite does not add new
-columns to a table just because this file changed. If that ever happens,
-delete db.sqlite3 and re-run seed_db.py -- your Moss cloud index is
-untouched either way.
+Phase 8a: the engine now points at Postgres (Supabase), read from
+settings.database_url. Schema changes from here on are Alembic
+migrations under backend/migrations/ -- never delete a database and
+re-run seed_db.py to "fix" a schema mismatch again; run
+`alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
 """
 
 from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from settings import settings
 
 Base = declarative_base()
 
@@ -98,9 +100,17 @@ class User(Base):
     role = Column(String, nullable=False, default="technician")
 
 
-engine = create_engine("sqlite:///./db.sqlite3")
+# pool_pre_ping checks a pooled connection is still alive before handing
+# it to a request -- worth having once the database is a network hop
+# away (Supabase) rather than a local file.
+engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)
 
 
 def init_db():
+    """Not called automatically anywhere anymore -- Alembic
+    (backend/migrations/) is the source of truth for schema now, and
+    running this against a database Alembic also manages will conflict
+    with it. Kept only as a convenience for a throwaway local SQLite
+    database outside the normal Postgres + Alembic flow."""
     Base.metadata.create_all(engine)

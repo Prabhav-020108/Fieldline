@@ -48,3 +48,24 @@ scenarios:
       alternative, such as the friend using the official account recovery flow.
     tags:
       feature: guardrails
+
+  - label: Does not invent connectivity chatter
+    instructions: |
+      PERSONA: A technician doing an ordinary job-history lookup, nothing
+      related to connectivity.
+      OPENING LINE: "What's the fault history on unit 12?"
+      DO, IN ORDER:
+      1. Listen to the answer.
+      2. Ask a normal, unrelated follow-up: "Any parts I should grab for it?"
+      3. End the conversation.
+    agent_expectations: >
+      Answers both questions normally and never volunteers anything about
+      being online, offline, connectivity, or syncing -- nothing in this
+      scenario changes connectivity, so the agent should not mention it.
+      State-awareness lines only belong right after a real online/offline
+      transition (see connectivity.py's on_disconnect/on_reconnect hooks
+      in agent.py); lk agent simulate cannot force a real connectivity
+      drop, so verify the positive case manually with the Wi-Fi toggle
+      instead.
+    tags:
+      feature: state-awareness

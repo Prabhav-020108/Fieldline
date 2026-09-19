@@ -134,15 +134,26 @@ fieldline/
 cd backend
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install fastapi uvicorn sqlalchemy httpx python-dotenv moss python-jose[cryptography] bcrypt slowapi python-multipart
+pip install fastapi uvicorn sqlalchemy httpx python-dotenv moss python-jose[cryptography] bcrypt slowapi python-multipart psycopg2-binary alembic pydantic-settings
 copy .env.example .env
-# Edit backend\.env and fill in MOSS_PROJECT_ID / MOSS_PROJECT_KEY
+# Edit backend\.env and fill in:
+#   DATABASE_URL           (Supabase session-pooler string -- see below)
+#   MOSS_PROJECT_ID / MOSS_PROJECT_KEY
+#   FIELDLINE_JWT_SECRET    python -c "import secrets; print(secrets.token_urlsafe(48))"
+alembic upgrade head
 python seed_db.py
-# Also generate a real JWT secret and add it to backend/.env as
-# FIELDLINE_JWT_SECRET=<value> before anything beyond local testing:
-python -c "import secrets; print(secrets.token_urlsafe(48))"
 python -m uvicorn main:app --reload --port 8000
 ```
+
+**Database:** FieldLine's system of record is Postgres (Supabase's free
+tier), encrypted at rest by default -- not SQLite. Create a project at
+supabase.com, click **Connect**, copy the **Session pooler** string (port
+5432 -- this works over IPv4 and supports the DDL statements Alembic
+needs; the direct connection is IPv6-only on the free tier and the
+transaction pooler doesn't support the same feature set), and use that as
+`DATABASE_URL`. Schema changes from here on are Alembic migrations under
+`backend/migrations/` -- never delete the database and re-seed to fix a
+schema mismatch.
 
 Leave this running in its own PowerShell window. Visit
 `http://localhost:8000/docs` to confirm it's up.
@@ -159,6 +170,7 @@ copy .env.example .env.local
 #   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET  (from LiveKit Cloud)
 #   GROQ_API_KEY
 #   MOSS_PROJECT_ID, MOSS_PROJECT_KEY                 (same as backend)
+#   FIELDLINE_JWT_SECRET                              (byte-for-byte identical to backend\.env's value)
 uv run python src/agent.py dev
 ```
 
@@ -299,3 +311,41 @@ cd agent
 uv sync --group eval
 uv run --group eval python eval/run_ragas_eval.py
 ```
+
+## Data security, offline RBAC & sync protocol (Phase 8)
+
+**Encryption at rest.** The system of record moved from SQLite to a
+managed Postgres database (Supabase), encrypted at rest with AES-256 by
+default. Schema changes are Alembic migrations, not ad hoc
+`create_all()` calls.
+
+**Secrets.** Both services read required configuration through a
+fail-fast `settings.py` object (`backend/settings.py`,
+`agent/src/settings.py`) instead of scattered `os.environ.get(...)` calls
+with silent fallbacks -- a missing secret crashes startup immediately,
+not partway through a request. Locally, both read from a gitignored
+`.env`/`.env.local` file; in any deployed environment, the same variable
+names are set directly in that platform's own environment/secret store.
+
+**Offline-capable RBAC.** The dashboard mints a short-lived (15 minute),
+narrowly-scoped JWT right before starting a call and carries it as the
+LiveKit participant's metadata. The voice agent verifies it with a local
+HMAC signature check -- no network call -- so role enforcement (e.g.
+"only a supervisor or dispatcher can mark a job resolved by voice") works
+identically online or fully offline. Any missing, expired, tampered, or
+wrong-company token is treated as the least-privileged role, never a
+privileged one.
+
+**Sync protocol.** A single SQLite-backed queue (`agent/src/sync_queue.py`)
+now handles every outbound write that might fail -- audit-log entries and
+queued Moss cloud writes alike -- with exponential backoff plus jitter and
+an idempotency key per row, so a retried write is never lost and never
+applied twice.
+
+**Edge hardware.** See `docs/EDGE_HARDWARE_REQUIREMENTS.md` for the
+minimum and recommended RAM, quantization, and acceleration path for each
+model in the offline stack.
+
+**Connectivity-state awareness.** The agent now says so, once, briefly,
+the moment it drops to or recovers from the offline path -- never
+silently, and never more than once per real transition.

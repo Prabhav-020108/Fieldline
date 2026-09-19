@@ -37,3 +37,7 @@ _audit_buffer/
 
 # GitHub CLI
 .github/personal-instructions.md
+
+# Phase 8d: local, durable sync queue (audit-log entries + queued Moss
+# writes awaiting retry). Per-machine runtime state, not source.
+_sync_queue.sqlite3

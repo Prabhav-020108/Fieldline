@@ -6,12 +6,7 @@ import { RoomAgentDispatch, RoomConfiguration } from "@livekit/protocol";
 export const dynamic = "force-dynamic";
 
 // Must match agent.py's @server.rtc_session(agent_name="fieldline-agent")
-// exactly. agent.py registers with an explicit agent_name, which turns OFF
-// automatic dispatch -- the agent will not join a room just because a
-// participant connects to it. Embedding a RoomAgentDispatch in the token
-// is what actually asks LiveKit to bring the agent into this room the
-// moment the token is used. Skip this and "Start voice call" would
-// connect you to a perfectly empty room forever.
+// exactly.
 const AGENT_NAME = "fieldline-agent";
 
 export async function GET(req: NextRequest) {
@@ -19,6 +14,11 @@ export async function GET(req: NextRequest) {
   const identity =
     req.nextUrl.searchParams.get("identity") ??
     `dispatcher-${Math.random().toString(36).slice(2, 8)}`;
+  // Phase 8c: an optional short-lived JWT minted by
+  // POST /companies/{id}/call-role-token, carried as participant metadata
+  // so agent/src/role_cache.py can verify it locally, offline-capable,
+  // once the call has started.
+  const roleToken = req.nextUrl.searchParams.get("roleToken") ?? undefined;
 
   if (!room) {
     return NextResponse.json({ error: "Missing 'room' query parameter" }, { status: 400 });
@@ -38,7 +38,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const at = new AccessToken(apiKey, apiSecret, { identity, name: "Dispatch console" });
+  const at = new AccessToken(apiKey, apiSecret, {
+    identity,
+    name: "Dispatch console",
+    metadata: roleToken,
+  });
   at.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true });
   at.roomConfig = new RoomConfiguration({
     agents: [new RoomAgentDispatch({ agentName: AGENT_NAME })],
