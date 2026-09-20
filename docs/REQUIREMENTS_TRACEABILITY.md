@@ -28,7 +28,7 @@ same rigor as the repo.
 | NFR-09 | Retrieval/answer quality | Faithfulness and context-precision scores on a fixed golden set, checked offline, never inline with a live call | `agent/eval/run_ragas_eval.py` + Ragas | Phase 7 |
 | NFR-10 | Role-based access control | Technicians can read/log notes; only supervisors/dispatchers can edit safety procedures or delete jobs/inventory; only dispatchers can reroute | `auth.require_role()` in `backend/main.py` | Phase 7 |
 | NFR-11 | Encryption at rest | SQLite today; documented roadmap item to move to a managed Postgres provider with encryption at rest by default before any real deployment | *(scoped, not yet implemented)* | Roadmap |
-| NFR-12 | Tenant isolation on writes | A valid token for one company cannot mutate another company's data | `auth.require_same_company()` | Phase 7 |
+| NFR-21 | Tenant isolation on writes | A valid token for one company cannot mutate another company's data | `auth.require_same_company()` | Phase 7 |
 
 ## Scoped, not implemented this phase (documented honestly rather than rushed)
 
@@ -47,3 +47,11 @@ same rigor as the repo.
 | NFR-15 | Sync protocol | A failed sync attempt retries with exponential backoff and jitter; a repeated idempotency key is never applied twice | `agent/src/sync_queue.py` | Phase 8d |
 | NFR-16 | Edge hardware requirements | Min/recommended RAM, quantization, and acceleration path stated per offline-path component | `docs/EDGE_HARDWARE_REQUIREMENTS.md` | Phase 8e |
 | NFR-17 | Connectivity-state awareness | The agent states an online/offline transition exactly once, before answering the technician's next question | `connectivity.py`'s `on_disconnect`/`on_reconnect` + `agent.py` | Phase 8f |
+
+## Phase 9 additions
+
+| ID | Requirement | Acceptance criteria | Component | Verified by |
+|---|---|---|---|---|
+| NFR-18 | Backend API test coverage | Every endpoint group (auth, companies, jobs, inventory, safety procedures, audit log, export) has automated tests for success, validation errors, role denials and cross-company isolation; the suite runs on a throwaway SQLite database, never real data | `backend/tests/` (91 tests) | Phase 9a |
+| NFR-19 | Agent behavior tests incl. offline path | All five tools, company routing, offline write queueing and local search are tested with Moss and the backend faked; each read tool is tested identically online and offline; the `log_job_note` role gate is tested with the network off | `agent/tests/` | Phase 9b |
+| NFR-20 | Continuous integration | Lint and tests run automatically on every push and pull request to `main` for the agent, backend (including `alembic upgrade head` on Postgres 16) and dashboard (lint and build); a red check blocks merging | `.github/workflows/` | Phase 9c |

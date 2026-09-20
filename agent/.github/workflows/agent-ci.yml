@@ -1,0 +1,47 @@
+# Agent CI: lint + the full agent test suite on every push and pull request.
+#
+# IMPORTANT: GitHub only reads workflows from the .github/workflows folder at
+# the ROOT of the repository. The workflow files that came with the LiveKit
+# starter template live in agent/.github/workflows/, where GitHub ignores
+# them -- which is why the agent's tests never ran automatically before.
+name: Agent CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  agent:
+    name: Agent tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Only catches real bugs (syntax errors, undefined names) -- not style.
+      - name: Lint (ruff, fatal errors only)
+        run: uv run ruff check --select E9,F63,F7,F82 src tests eval
+
+      # No .env.local exists on the CI machine: agent/tests/conftest.py
+      # supplies dummy settings, and every test fakes Moss/backend/network.
+      - name: Run agent tests
+        run: uv run pytest -v

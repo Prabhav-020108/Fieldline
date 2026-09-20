@@ -1,0 +1,101 @@
+# Backend CI: lint, apply the database migrations to a REAL Postgres, then
+# run the backend test suite.
+#
+# Note the two different databases on purpose:
+#   - "alembic upgrade head" runs against the Postgres service container
+#     below, proving the migration files really build the schema on the same
+#     kind of database production uses (Supabase = Postgres).
+#   - "pytest" uses its own throwaway SQLite file (backend/tests/conftest.py
+#     forces that), so tests are fast and can never touch a real database.
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fieldline
+          POSTGRES_PASSWORD: fieldline
+          POSTGRES_DB: fieldline_test
+        ports:
+          - 5432:5432
+        # GitHub waits for this health check to pass before running the steps.
+        options: >-
+          --health-cmd "pg_isready -U fieldline -d fieldline_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    # Dummy values so backend/settings.py (which refuses to start without
+    # them) can load. None of these are real secrets.
+    env:
+      DATABASE_URL: postgresql://fieldline:fieldline@localhost:5432/fieldline_test
+      FIELDLINE_JWT_SECRET: ci-only-jwt-secret-not-a-real-secret
+      MOSS_PROJECT_ID: ci-dummy-moss-project-id
+      MOSS_PROJECT_KEY: ci-dummy-moss-project-key
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Only catches real bugs (syntax errors, undefined names) -- not style.
+      - name: Lint (ruff, fatal errors only)
+        run: uv run ruff check --select E9,F63,F7,F82 .
+
+      # The health check above already gates the job on Postgres being ready.
+      # This loop is a second safety net so a slow container start can never
+      # cause a false failure in the migration step.
+      - name: Wait until Postgres accepts connections
+        run: |
+          uv run python - <<'PY'
+          import os
+          import sys
+          import time
+
+          import psycopg2
+
+          for attempt in range(1, 31):
+              try:
+                  psycopg2.connect(os.environ["DATABASE_URL"]).close()
+                  print(f"Postgres is ready (attempt {attempt})")
+                  sys.exit(0)
+              except psycopg2.OperationalError as exc:
+                  print(f"attempt {attempt}: not ready yet ({type(exc).__name__})")
+                  time.sleep(2)
+          sys.exit("Postgres never became ready")
+          PY
+
+      - name: Apply database migrations (alembic upgrade head)
+        run: uv run alembic upgrade head
+
+      - name: Re-apply migrations (must be a harmless no-op)
+        run: uv run alembic upgrade head
+
+      - name: Run backend tests
+        run: uv run pytest -v

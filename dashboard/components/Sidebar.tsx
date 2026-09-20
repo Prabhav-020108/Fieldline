@@ -35,10 +35,11 @@ export default function Sidebar() {
   }, [pathname]);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
-      setCurrentUser(null);
-      return;
-    }
+    // Signed out: nothing to look up. No setState is needed here -- the
+    // current user is already null on first load, and handleLogout() below
+    // clears it. (Calling setState synchronously inside an effect is what
+    // the react-hooks/set-state-in-effect lint rule forbids.)
+    if (!isLoggedIn()) return;
     getCurrentUser()
       .then(setCurrentUser)
       .catch(() => {

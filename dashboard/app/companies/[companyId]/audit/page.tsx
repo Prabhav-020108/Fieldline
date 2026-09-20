@@ -69,21 +69,30 @@ function AuditLogPageInner({ companyId }: { companyId: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [toolFilter, setToolFilter] = useState<ToolName | "all">("all");
 
+  // Fetches the log. setState is only ever called inside the .then/.catch
+  // callbacks (after the network reply arrives), never synchronously -- that
+  // is what makes it safe to call from a useEffect without tripping the
+  // react-hooks/set-state-in-effect lint rule.
+  const load = () =>
+    listAuditLog(companyId)
+      .then((data) => {
+        setEntries(data);
+        setLoadError(null);
+      })
+      .catch((err: unknown) => {
+        setLoadError(err instanceof Error ? err.message : "Could not load the audit log.");
+      });
+
+  // Wired to the "Refresh" button. That is an event handler, so it may call
+  // setState straight away to show the spinning icon.
   const refresh = async () => {
     setRefreshing(true);
-    try {
-      const data = await listAuditLog(companyId);
-      setEntries(data);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not load the audit log.");
-    } finally {
-      setRefreshing(false);
-    }
+    await load();
+    setRefreshing(false);
   };
 
   useEffect(() => {
-    refresh();
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
 

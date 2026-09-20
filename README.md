@@ -132,17 +132,15 @@ fieldline/
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install fastapi uvicorn sqlalchemy httpx python-dotenv moss python-jose[cryptography] bcrypt slowapi python-multipart psycopg2-binary alembic pydantic-settings
+uv sync
 copy .env.example .env
 # Edit backend\.env and fill in:
 #   DATABASE_URL           (Supabase session-pooler string -- see below)
 #   MOSS_PROJECT_ID / MOSS_PROJECT_KEY
-#   FIELDLINE_JWT_SECRET    python -c "import secrets; print(secrets.token_urlsafe(48))"
-alembic upgrade head
-python seed_db.py
-python -m uvicorn main:app --reload --port 8000
+#   FIELDLINE_JWT_SECRET    uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
+uv run alembic upgrade head
+uv run python seed_db.py
+uv run uvicorn main:app --reload --port 8000
 ```
 
 **Database:** FieldLine's system of record is Postgres (Supabase's free
@@ -218,13 +216,36 @@ Open `http://localhost:3000`.
 ## Testing
 
 ```powershell
+# Agent -- all five tools, company routing, offline write queueing, RBAC
 cd agent
 uv run pytest -v
+
+# Backend -- every endpoint group, role rules, tenant isolation (91 tests)
+cd ..\backend
+uv run pytest -v
+
+# Dashboard -- lint + production build
+cd ..\dashboard
+npm run lint
+npm run build
 ```
 
-Covers: agent greeting behavior, safety-procedure confidence-floor logic
-(including the Phase 6 tunable threshold), and audit-log buffering/flush
-behavior when the backend is briefly unreachable.
+The agent and backend suites never touch real services: Moss, the backend
+and the network are replaced by fakes, and backend tests run against a
+throwaway SQLite file, never the Supabase database.
+
+## Continuous integration (Phase 9)
+
+Three GitHub Actions workflows in `.github/workflows/` run on every push and
+pull request to `main`:
+
+| Workflow | What it runs |
+|---|---|
+| `agent-ci.yml` | `uv sync`, ruff (fatal-error rules), full agent test suite |
+| `backend-ci.yml` | `uv sync`, ruff, `alembic upgrade head` (twice) against a Postgres 16 container, full backend test suite |
+| `dashboard-ci.yml` | `npm ci`, `npm run lint`, `npm run build` |
+
+Branch protection on `main` requires all three to pass before merging.
 
 ## Safety & audit trail (Phase 6)
 
