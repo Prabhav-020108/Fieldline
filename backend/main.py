@@ -61,6 +61,7 @@ import auth
 import moss_sync
 from document_builder import dispatch_queue_doc, dispatch_reroute_doc, inventory_to_doc, job_to_doc, safety_to_doc
 from models import AuditLogEntry, Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, User
+from settings import settings
 
 logger = logging.getLogger("fieldline.backend")
 logging.basicConfig(level=logging.INFO)
@@ -79,9 +80,18 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
+# Phase 10: allowed browser origins come from the CORS_ALLOWED_ORIGINS
+# setting (comma-separated) so the deployed Vercel dashboard can call this
+# API. Defaults to local development only.
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in settings.cors_allowed_origins.split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

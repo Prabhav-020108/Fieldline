@@ -27,5 +27,10 @@ class Settings(BaseSettings):
     moss_project_id: str
     moss_project_key: str
 
+    # Phase 10: browser origins allowed to call this API, comma-separated.
+    # The default is local development only; set CORS_ALLOWED_ORIGINS in
+    # Render to include the deployed Vercel dashboard URL.
+    cors_allowed_origins: str = "http://localhost:3000"
+
 
 settings = Settings()

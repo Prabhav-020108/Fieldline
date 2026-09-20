@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import textwrap
 
 from dotenv import load_dotenv
@@ -177,7 +178,11 @@ async def entrypoint(ctx: JobContext) -> None:
                 "warm_up_local_stt; warm_up_local_stt()\""
             )
 
-    asyncio.create_task(_warm_up_stt())
+    # Phase 10: the LiveKit Cloud container has no offline path to warm up
+    # (no Ollama, no Piper server), so the deployed agent skips both
+    # warm-ups. Locally this variable is unset and nothing changes.
+    if os.environ.get("FIELDLINE_CLOUD_DEPLOY") != "1":
+        asyncio.create_task(_warm_up_stt())
 
     async def _warm_up_llm() -> None:
         try:
@@ -203,7 +208,8 @@ async def entrypoint(ctx: JobContext) -> None:
                 "ollama serve"
             )
 
-    asyncio.create_task(_warm_up_llm())
+    if os.environ.get("FIELDLINE_CLOUD_DEPLOY") != "1":
+        asyncio.create_task(_warm_up_llm())
 
     cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
     cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
