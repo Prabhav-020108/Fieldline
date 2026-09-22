@@ -84,15 +84,17 @@ async def log_tool_call(
     if connectivity.is_online:
         try:
             if await _post_entry(company_id, entry):
+                connectivity.mark_online()
                 return
             logger.warning(
                 "audit-log backend unreachable for company %r -- queuing for "
-                "retry (this does not affect the voice pipeline's own "
-                "online/offline state)",
+                "retry and marking offline",
                 company_id,
             )
+            connectivity.mark_offline()
         except Exception:
             logger.exception("audit log POST raised unexpectedly for company %r", company_id)
+            connectivity.mark_offline()
 
     await sync_queue.enqueue(
         op_type="audit_log_entry",
