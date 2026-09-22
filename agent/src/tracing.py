@@ -76,11 +76,18 @@ class _NoOpTracer:
         yield _NoOpSpan()
 
 
+_TRACING_DISABLED = os.environ.get("OTEL_SDK_DISABLED", "").lower() == "true"
+
+
 def _build_tracer():
     """Try to stand up a real Phoenix/OpenTelemetry tracer. Falls back to
     a no-op tracer on ANY failure -- a missing `arize-phoenix` install, no
     Phoenix server listening, or a version mismatch should degrade
     observability, never block the voice pipeline from starting."""
+    if _TRACING_DISABLED:
+        logger.info("OTEL_SDK_DISABLED=true -- skipping the arize-phoenix import entirely")
+        return _NoOpTracer()
+
     try:
         from phoenix.otel import register
 

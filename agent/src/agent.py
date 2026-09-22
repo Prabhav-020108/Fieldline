@@ -144,7 +144,7 @@ class FieldLineAssistant(Agent):
         )
 
 
-server = AgentServer()
+server = AgentServer(initialize_process_timeout=90.0)
 
 
 @server.rtc_session(agent_name="fieldline-agent")
