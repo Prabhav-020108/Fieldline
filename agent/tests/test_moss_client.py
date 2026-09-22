@@ -102,7 +102,7 @@ async def test_documents_matching_more_keywords_rank_first():
 
     assert _ids(results) == ["job-1", "job-2"]
     assert results.docs[0].score == pytest.approx(1.0)  # both words found
-    assert results.docs[1].score == pytest.approx(0.5)  # only "unit-12" found
+    assert results.docs[1].score == pytest.approx(0.95)  # boosted by exact-identifier match ("unit-12")
 
 
 async def test_top_k_limits_the_number_of_results():
@@ -251,3 +251,34 @@ async def test_the_same_offline_write_is_only_queued_once(monkeypatch):
     await router.add_docs("site-demo", [_note_doc()], None)
 
     assert len(_queue_rows()) == 1
+
+
+async def test_exact_equipment_type_match_disambiguates_panel_a_and_b():
+    for order in (["panel-a", "panel-b"], ["panel-b", "panel-a"]):
+        session = _LocalSession()
+        docs = {
+            "panel-a": DocumentInfo(id="safety-a", text="Section 4.1 - Panel A Lockout: ...",
+                                     metadata={"type": "safety_manual", "equipment_type": "panel-a"}),
+            "panel-b": DocumentInfo(id="safety-b", text="Section 4.2 - Panel B Lockout: ...",
+                                     metadata={"type": "safety_manual", "equipment_type": "panel-b"}),
+        }
+        await session.add_docs([docs[k] for k in order])
+
+        results = await session.query("panel A lockout", _options("safety_manual", top_k=1))
+        assert results.docs[0].id == "safety-a"
+
+        results = await session.query("panel B lockout", _options("safety_manual", top_k=1))
+        assert results.docs[0].id == "safety-b"
+
+
+async def test_exact_equipment_match_beats_unrelated_keyword_overlap():
+    session = _LocalSession()
+    await session.add_docs([
+        DocumentInfo(id="job-12", text="unit-12 - Recurring low-refrigerant flag on the 15th.",
+                     metadata={"type": "job_history", "equipment": "unit-12"}),
+        DocumentInfo(id="job-3", text="unit-3 - Drive fault and encoder error, replaced for safety.",
+                     metadata={"type": "job_history", "equipment": "unit-3"}),
+    ])
+
+    results = await session.query("job and fault history for unit-12", _options("job_history"))
+    assert results.docs[0].id == "job-12"

@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, Plus } from "lucide-react";
 
-import { createCompany, listCompanies } from "@/lib/api";
+import { createCompany } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import { INDUSTRIES, LANGUAGES, type Company } from "@/lib/types";
 import { Badge, Button, EmptyState, Field, Input, Modal, Select, Spinner } from "@/components/ui";
 
@@ -21,20 +22,12 @@ const industryLabel = (value: string) =>
 
 export default function CompaniesPage() {
   const router = useRouter();
-  const [companies, setCompanies] = useState<Company[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { companies, companiesError: loadError, fetchCompanies } = useAppStore();
   const [modalOpen, setModalOpen] = useState(false);
 
-  const refresh = () => {
-    listCompanies()
-      .then((data) => {
-        setCompanies(data);
-        setLoadError(null);
-      })
-      .catch((err: Error) => setLoadError(err.message));
-  };
-
-  useEffect(refresh, []);
+  useEffect(() => {
+    fetchCompanies();
+  }, [fetchCompanies]);
 
   return (
     <div className="max-w-5xl mx-auto px-8 py-10">
@@ -100,7 +93,7 @@ export default function CompaniesPage() {
         onClose={() => setModalOpen(false)}
         onCreated={(company) => {
           setModalOpen(false);
-          refresh();
+          fetchCompanies();
           router.push(`/companies/${company.id}`);
         }}
       />
