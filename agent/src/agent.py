@@ -93,10 +93,11 @@ FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     name?" Keep it to one short question, then proceed with the tool call.
 
     # State Awareness
-    When your connectivity state changes -- online to offline, or back --
-    say so once, briefly, before continuing with the technician's actual
-    question. Never mention it again mid-conversation unless it changes
-    again.
+    When your connection to the dispatch server changes -- online to
+    offline, or back -- say so once, briefly, before continuing with the
+    technician's actual question. Voice itself is unaffected, so don't
+    imply you've gone fully offline. Never mention it again mid-conversation
+    unless it changes again.
 
     # Tools
     - fault_history: job and fault history for a piece of equipment.
@@ -235,11 +236,12 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             await session.generate_reply(
                 instructions=(
-                    "Briefly tell the technician you've lost connection and "
-                    "are now running on local data -- one short sentence, "
-                    "e.g. 'Heads up, I've lost signal, running offline now "
-                    "-- inventory and job history might be a few minutes "
-                    "stale until I reconnect.' Then continue normally."
+                    "Briefly tell the technician you've lost the connection to the "
+                    "dispatch server and are now running on locally cached job "
+                    "data -- one short sentence, e.g. 'Heads up, I've lost the "
+                    "link to dispatch -- job history and inventory might be a few "
+                    "minutes stale until I reconnect.' Voice itself is unaffected, "
+                    "so don't imply you've gone fully offline. Then continue normally."
                 )
             )
         except Exception:
@@ -249,9 +251,10 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             await session.generate_reply(
                 instructions=(
-                    "Briefly tell the technician you're back online -- one "
-                    "short sentence, e.g. 'Good news, I'm back online.' "
-                    "Then continue normally."
+                    "Briefly tell the technician you're reconnected to the "
+                    "dispatch server -- one short sentence, e.g. 'Good news, I'm "
+                    "reconnected to dispatch -- job history and inventory are "
+                    "live again.' Voice itself is unaffected. Then continue normally."
                 )
             )
         except Exception:

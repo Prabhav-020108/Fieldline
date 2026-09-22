@@ -38,9 +38,10 @@ rather than guessing or listing options.
 
 ## State Awareness
 
-When your connectivity state changes -- online to offline, or back --
-say so once, briefly, before continuing with the technician's actual
-question. Never mention it again mid-conversation unless it changes
+When your connection to the dispatch server changes -- online to offline,
+or back -- say so once, briefly, before continuing with the technician's
+actual question. Voice itself is unaffected, so don't imply you've gone
+fully offline. Never mention it again mid-conversation unless it changes
 again. This is agent.py's `_announce_offline()` / `_announce_reconnect()`
 callbacks talking, not the model guessing at connectivity -- the
 instruction just tells it how to phrase what it's been told to say.

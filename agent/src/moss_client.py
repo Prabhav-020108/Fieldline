@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,6 +80,10 @@ class _LocalResults:
     docs: list[_LocalDoc]
 
 
+def _normalize_identifier(value: str) -> str:
+    return re.sub(r"[\s_-]+", "", value.lower())
+
+
 class _LocalSession:
     """In-memory keyword search fallback -- no Moss, no embeddings, no
     network. One instance per company; see MossRouter / _get_session
@@ -98,10 +103,8 @@ class _LocalSession:
             )
 
     async def query(self, text: str, options: Any = None) -> _LocalResults:
-        """Keyword search: score each doc by how many query words it
-        contains. Applies the filter from QueryOptions.filter when
-        present."""
         text_lower = text.lower()
+        normalized_query = _normalize_identifier(text)
         keywords = [w for w in text_lower.split() if len(w) > 2]
 
         filter_field: str | None = None
@@ -113,22 +116,44 @@ class _LocalSession:
                 cond = raw_filter.get("condition", {})
                 filter_value = cond.get("$eq")
 
-        scored: list[tuple[float, _LocalDoc]] = []
+        scored: list[tuple[float, bool, _LocalDoc]] = []
         for doc in self._docs:
             if filter_field and filter_value is not None:
                 if doc.metadata.get(filter_field) != filter_value:
                     continue
             doc_text = doc.text.lower()
             hits = sum(1 for kw in keywords if kw in doc_text)
-            if hits > 0:
-                score = min(hits / max(len(keywords), 1), 1.0)
-                scored.append((score, doc))
+            score = min(hits / max(len(keywords), 1), 1.0) if hits else 0.0
+
+            # Exact-identifier boost -- fixes two real bugs found during
+            # hardening: (1) "panel A lockout" and "panel B lockout" reduce
+            # to the identical keyword set {"panel","lockout"} once words
+            # of length <=2 are dropped, so whichever doc was inserted
+            # first always won the tie, independent of which panel was
+            # actually asked about; (2) a generic query like "job and fault
+            # history for unit-12" could be outscored by an unrelated
+            # unit's note that happened to share more of the sentence's
+            # filler words. See test_moss_client.py's
+            # test_exact_equipment_type_match_disambiguates_panel_a_and_b
+            # and test_exact_equipment_match_beats_unrelated_keyword_overlap.
+            identifier = (
+                doc.metadata.get("equipment_type")
+                or doc.metadata.get("equipment")
+                or doc.metadata.get("part_number")
+            )
+            exact_match = bool(identifier and _normalize_identifier(identifier) in normalized_query)
+            if exact_match:
+                score = max(score, 0.95)
+
+            if score > 0:
+                scored.append((score, exact_match, doc))
 
         top_k = getattr(options, "top_k", 5) if options else 5
-        scored.sort(key=lambda x: x[0], reverse=True)
-        results = []
-        for score, doc in scored[:top_k]:
-            results.append(_LocalDoc(id=doc.id, text=doc.text, score=score, metadata=doc.metadata))
+        scored.sort(key=lambda x: (x[1], x[0]), reverse=True)
+        results = [
+            _LocalDoc(id=doc.id, text=doc.text, score=score, metadata=doc.metadata)
+            for score, _exact, doc in scored[:top_k]
+        ]
         return _LocalResults(docs=results)
 
     async def push_index(self) -> None:

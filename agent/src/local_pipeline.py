@@ -51,6 +51,7 @@ WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 PIPER_TTS_BASE_URL = os.environ.get("PIPER_TTS_BASE_URL", "http://localhost:8880/v1")
+CLOUD_DEPLOY = os.environ.get("FIELDLINE_CLOUD_DEPLOY") == "1"
 
 
 class FasterWhisperSTT(stt.STT):
@@ -189,13 +190,17 @@ def build_local_tts() -> tts.TTS:
 
 
 def build_hybrid_stt(cloud_stt: stt.STT) -> stt.STT:
-    """Cloud STT first, faster-whisper as the offline fallback.
-
-    Neither Groq's STT nor faster-whisper streams natively (both transcribe
-    a full utterance at once), so we hand FallbackAdapter a VAD and let it
-    wrap both with stt.StreamAdapter automatically -- this is exactly what
-    the ValueError it raises without a VAD tells you to do.
-    """
+    """Cloud STT first, faster-whisper as the offline fallback -- but ONLY
+    when this process has a local machine under it. LiveKit Cloud gives the
+    deployed agent no such machine: Ollama, Piper, and faster-whisper have
+    nowhere to run there. Before this fix, FallbackAdapter still listed the
+    local half in the cloud deployment, so a transient cloud STT hiccup
+    tried to reach a dead localhost address inside the LiveKit Cloud
+    container instead of degrading cleanly -- this was the actual crash
+    behind "most things crash when we go offline." See
+    docs/CONNECTIVITY_MODEL.md for the corrected three-tier story."""
+    if CLOUD_DEPLOY:
+        return cloud_stt
     return stt.FallbackAdapter([cloud_stt, build_local_stt()], vad=silero.VAD.load())
 
 
@@ -267,13 +272,8 @@ def warm_up_local_stt() -> None:
 
 
 def build_hybrid_llm(cloud_llm: llm.LLM) -> llm.LLM:
-    """Cloud LLM first, Ollama as the offline fallback.
-
-    attempt_timeout is set to 120s (default is 5s) because Ollama on CPU
-    needs 15-30 seconds to load llama3.2:3b from disk on the first call.
-    After that it stays hot in memory and responds in 1-5s. The 5s default
-    would kill every cold-start attempt before Ollama finishes loading.
-    """
+    if CLOUD_DEPLOY:
+        return cloud_llm
     return llm.FallbackAdapter(
         [cloud_llm, build_local_llm()],
         attempt_timeout=120.0,   # 2 min -- covers Ollama cold start on CPU
@@ -281,5 +281,6 @@ def build_hybrid_llm(cloud_llm: llm.LLM) -> llm.LLM:
 
 
 def build_hybrid_tts(cloud_tts: tts.TTS) -> tts.TTS:
-    """Cloud TTS first, Piper as the offline fallback."""
+    if CLOUD_DEPLOY:
+        return cloud_tts
     return tts.FallbackAdapter([cloud_tts, build_local_tts()])

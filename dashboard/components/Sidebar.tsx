@@ -2,56 +2,23 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { LogIn, LogOut, Plus, Radio } from "lucide-react";
 
-import { getCurrentUser, isLoggedIn, listCompanies, logout } from "@/lib/api";
-import type { Company } from "@/lib/types";
-
-interface CurrentUser {
-  username: string;
-  role: string;
-  company_id: string;
-}
+import { useAppStore } from "@/lib/store";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [companies, setCompanies] = useState<Company[] | null>(null);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const { companies, currentUser, fetchCompanies, fetchCurrentUser, logout } = useAppStore();
 
   useEffect(() => {
-    let cancelled = false;
-    listCompanies()
-      .then((data) => {
-        if (!cancelled) setCompanies(data);
-      })
-      .catch(() => {
-        if (!cancelled) setCompanies([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pathname]);
-
-  useEffect(() => {
-    // Signed out: nothing to look up. No setState is needed here -- the
-    // current user is already null on first load, and handleLogout() below
-    // clears it. (Calling setState synchronously inside an effect is what
-    // the react-hooks/set-state-in-effect lint rule forbids.)
-    if (!isLoggedIn()) return;
-    getCurrentUser()
-      .then(setCurrentUser)
-      .catch(() => {
-        // token expired/invalid -- clear it quietly rather than showing an error
-        logout();
-        setCurrentUser(null);
-      });
-  }, [pathname]);
+    fetchCompanies();
+    fetchCurrentUser();
+  }, [pathname, fetchCompanies, fetchCurrentUser]);
 
   const handleLogout = () => {
     logout();
-    setCurrentUser(null);
     router.push("/");
   };
 

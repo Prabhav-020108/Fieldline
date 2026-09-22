@@ -69,3 +69,20 @@ scenarios:
       instead.
     tags:
       feature: state-awareness
+
+  - label: Acknowledges degraded dispatch connectivity
+    instructions: |
+      PERSONA: A technician whose dispatch connectivity was just interrupted.
+      OPENING LINE: "Can I still look up safety procedures for panel B while dispatch is down?"
+      DO, IN ORDER:
+      1. Listen to the assistant's answer.
+      2. Verify it confirms procedures are accessible from local cache.
+      3. Say thanks and end the conversation.
+    agent_expectations: >
+      Reassures the technician that safety procedures and cached job history
+      remain accessible even when dispatch or cloud sync is degraded, noting
+      that new notes will queue locally until reconnected. Keeps the response
+      calm, brief, and factual.
+    tags:
+      feature: state-awareness
+

@@ -263,16 +263,23 @@ Branch protection on `main` requires all three to pass before merging.
   backend is reachable again.
 - View the trail per company at **Dashboard → \[Company\] → Audit log**.
 
-## Offline-first demo
+## Connectivity model & degraded operation
+
+FieldLine distinguishes between full connectivity, degraded backend connectivity, and complete signal loss (see `docs/CONNECTIVITY_MODEL.md` for the comprehensive specification):
+
+| Tier | Status | What works |
+|---|---|---|
+| **Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss all online | Cloud STT/LLM/TTS, live sync to Moss and Postgres |
+| **Degraded connectivity** | WebRTC voice connection stays up; backend/Moss drops | Retrieval continues via in-memory local Moss session; notes and audit entries buffer to SQLite via `sync_queue.py` and replay on reconnect |
+| **Total signal loss** | Phone has zero internet/cellular signal | Cloud-hosted agent cannot receive audio; self-hosted on-prem edge box (using local faster-whisper/Ollama/Piper stack) is the scoped path |
+
+## Offline & degraded connectivity rehearsal
 
 1. Start a call from the dashboard's **Talk to agent** tab.
-2. Ask a question (e.g. "What's the history on unit twelve?").
-3. Turn off Wi-Fi.
-4. Ask another question — the agent keeps answering, now via the local
-   Moss `SessionIndex` and the local STT/LLM/TTS pipeline.
-5. Turn Wi-Fi back on — the agent hot-swaps back to the cloud pipeline and
-   pushes anything logged offline (job notes, buffered audit entries) back
-   to the cloud, with zero restart.
+2. Ask a question (e.g. "What's the fault history on unit twelve?").
+3. Simulate backend/Moss drop (or run locally with network toggled).
+4. Ask another question — the agent continues answering using its local in-memory session index; new job notes and audit entries are durably queued into `_sync_queue.sqlite3`.
+5. Restore connectivity — the sync queue automatically drains and pushes queued writes to the cloud with exponential backoff and idempotency protection.
 
 ## Observability, security & evaluation (Phase 7)
 
