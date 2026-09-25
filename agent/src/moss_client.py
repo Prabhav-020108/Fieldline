@@ -43,10 +43,10 @@ from typing import Any
 import httpx
 from moss import DocumentInfo, MossClient, MutationOptions
 
+import sync_queue
 from company_context import DEFAULT_COMPANY_ID, get_current_company
 from connectivity import connectivity
 from settings import settings
-import sync_queue
 
 logger = logging.getLogger("fieldline.moss_client")
 
@@ -118,9 +118,8 @@ class _LocalSession:
 
         scored: list[tuple[float, bool, _LocalDoc]] = []
         for doc in self._docs:
-            if filter_field and filter_value is not None:
-                if doc.metadata.get(filter_field) != filter_value:
-                    continue
+            if filter_field and filter_value is not None and doc.metadata.get(filter_field) != filter_value:
+                continue
             doc_text = doc.text.lower()
             hits = sum(1 for kw in keywords if kw in doc_text)
             score = min(hits / max(len(keywords), 1), 1.0) if hits else 0.0
@@ -340,16 +339,19 @@ async def get_index() -> tuple[MossRouter, str]:
             index_name = config.get("moss_index_name") or f"company-{company_id}"
 
             cloud_client = MossClient(settings.moss_project_id, settings.moss_project_key)
-            try:
-                await cloud_client.load_index(index_name)
-            except Exception:
-                logger.warning(
-                    "cloud_client.load_index(%r) failed for company %r -- "
-                    "continuing with the local session only. Cloud writes "
-                    "from log_job_note will still be attempted per-call.",
-                    index_name,
-                    company_id,
-                )
+            if os.environ.get("FIELDLINE_EDGE_MODE") == "1":
+                logger.info("edge mode -- skipping cloud index load, using local session only")
+            else:
+                try:
+                    await cloud_client.load_index(index_name)
+                except Exception:
+                    logger.warning(
+                        "cloud_client.load_index(%r) failed for company %r -- "
+                        "continuing with the local session only. Cloud writes "
+                        "from log_job_note will still be attempted per-call.",
+                        index_name,
+                        company_id,
+                    )
 
             router = MossRouter(company_id, index_name, cloud_client)
             await router._get_session()

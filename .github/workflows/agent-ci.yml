@@ -1,0 +1,40 @@
+name: Agent CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Run pytest
+        run: uv run pytest -v --tb=short

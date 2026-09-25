@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { LogIn, LogOut, Plus, Radio } from "lucide-react";
 
 import { useAppStore } from "@/lib/store";
+import { ConnectivityIndicator } from "./ConnectivityIndicator";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -24,7 +25,7 @@ export default function Sidebar() {
 
   return (
     <aside className="w-64 shrink-0 border-r border-[var(--line)] bg-[var(--surface)] flex flex-col h-screen sticky top-0">
-      <div className="px-5 pt-6 pb-5">
+      <div className="px-5 pt-6 pb-4">
         <Link href="/" className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--brand)] text-white">
             <Radio size={16} />
@@ -33,7 +34,9 @@ export default function Sidebar() {
             FieldLine
           </span>
         </Link>
-        <p className="mt-1.5 text-xs text-[var(--ink-faint)] pl-[42px]">Dispatch console</p>
+        <div className="mt-2 pl-[42px]">
+          <ConnectivityIndicator />
+        </div>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-6">

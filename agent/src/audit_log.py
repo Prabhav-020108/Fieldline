@@ -22,10 +22,10 @@ from datetime import datetime, timezone
 
 import httpx
 
+import sync_queue
 from company_context import get_current_company
 from connectivity import connectivity
 from settings import settings
-import sync_queue
 
 logger = logging.getLogger("fieldline.audit_log")
 

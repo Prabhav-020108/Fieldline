@@ -44,6 +44,7 @@ Then open http://localhost:8000/docs for FastAPI's interactive API explorer.
 """
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -55,21 +56,76 @@ from pydantic import BaseModel, ConfigDict, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 
 import auth
 import moss_sync
-from document_builder import dispatch_queue_doc, dispatch_reroute_doc, inventory_to_doc, job_to_doc, safety_to_doc
-from models import AuditLogEntry, Company, DispatchEvent, InventoryItem, Job, SafetyProcedure, SessionLocal, User
+from document_builder import (
+    dispatch_queue_doc,
+    dispatch_reroute_doc,
+    inventory_to_doc,
+    job_to_doc,
+    safety_to_doc,
+)
+from models import (
+    AuditLogEntry,
+    Company,
+    DispatchEvent,
+    InventoryItem,
+    Job,
+    SafetyProcedure,
+    SessionLocal,
+    User,
+)
 from settings import settings
 
 logger = logging.getLogger("fieldline.backend")
 logging.basicConfig(level=logging.INFO)
 
+# Observability: Sentry initialization if configured
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            traces_sample_rate=1.0,
+            environment=settings.environment,
+        )
+        logger.info("Sentry monitoring initialized (env=%s)", settings.environment)
+    except Exception as e:
+        logger.warning("Could not initialize Sentry: %s", e)
+
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title="FieldLine Dispatch Backend")
 app.state.limiter = limiter
+
+
+@app.on_event("startup")
+def on_startup():
+    """Ensure database tables exist on startup (especially for edge SQLite)."""
+    try:
+        from models import init_db
+        init_db()
+    except Exception as e:
+        logger.warning("Database init_db skipped/failed: %s", e)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """HTTP request/response logging middleware recording method, path, status and latency."""
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    logger.info(
+        "%s %s -> %s (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -96,6 +152,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_db():
+    """Dependency that yields a database session and guarantees closure on completion."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +277,7 @@ class AuditLogOut(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_company_or_404(db, company_id: str) -> Company:
+def _get_company_or_404(db: Session, company_id: str) -> Company:
     company = db.query(Company).filter(Company.id == company_id).first()
     if company is None:
         raise HTTPException(status_code=404, detail=f"No company '{company_id}'")
@@ -248,29 +313,29 @@ def health() -> dict:
 
 @app.post("/auth/token")
 @limiter.limit("20/minute")
-def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+def login_for_access_token(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
     """Standard OAuth2 password-flow login. See backend/seed_db.py for
     demo accounts (password FieldLine123! for all of them)."""
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.username == form_data.username).first()
-        if user is None or not auth.verify_password(form_data.password, user.hashed_password):
-            raise HTTPException(
-                status_code=401,
-                detail="Incorrect username or password.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        token = auth.create_access_token(
-            username=user.username, role=user.role, company_id=user.company_id
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if user is None or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "role": user.role,
-            "company_id": user.company_id,
-        }
-    finally:
-        db.close()
+    token = auth.create_access_token(
+        username=user.username, role=user.role, company_id=user.company_id
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": user.role,
+        "company_id": user.company_id,
+    }
 
 
 @app.get("/auth/me")
@@ -283,46 +348,39 @@ def read_current_user(user: dict = Depends(auth.get_current_user)):
 # ---------------------------------------------------------------------------
 
 @app.get("/companies", response_model=list[CompanyOut])
-def list_companies():
-    db = SessionLocal()
-    try:
-        return db.query(Company).all()
-    finally:
-        db.close()
+def list_companies(db: Session = Depends(get_db)):
+    return db.query(Company).all()
 
 
 @app.post("/companies", response_model=CompanyOut, status_code=201)
 @limiter.limit("10/minute")
-def create_company(request: Request, payload: CompanyIn, background_tasks: BackgroundTasks):
-    db = SessionLocal()
-    try:
-        existing = db.query(Company).filter(Company.id == payload.id).first()
-        if existing is not None:
-            raise HTTPException(status_code=409, detail=f"Company '{payload.id}' already exists")
-        index_name = payload.moss_index_name or f"company-{payload.id}"
-        company = Company(
-            id=payload.id,
-            name=payload.name,
-            industry=payload.industry,
-            language_preference=payload.language_preference,
-            moss_index_name=index_name,
-        )
-        db.add(company)
-        db.commit()
-        db.refresh(company)
-        _background_sync(company.id, background_tasks)
-        return company
-    finally:
-        db.close()
+def create_company(
+    request: Request,
+    payload: CompanyIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    existing = db.query(Company).filter(Company.id == payload.id).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"Company '{payload.id}' already exists")
+    index_name = payload.moss_index_name or f"company-{payload.id}"
+    company = Company(
+        id=payload.id,
+        name=payload.name,
+        industry=payload.industry,
+        language_preference=payload.language_preference,
+        moss_index_name=index_name,
+    )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    _background_sync(company.id, background_tasks)
+    return company
 
 
 @app.get("/companies/{company_id}", response_model=CompanyOut)
-def get_company(company_id: str):
-    db = SessionLocal()
-    try:
-        return _get_company_or_404(db, company_id)
-    finally:
-        db.close()
+def get_company(company_id: str, db: Session = Depends(get_db)):
+    return _get_company_or_404(db, company_id)
 
 
 @app.put("/companies/{company_id}", response_model=CompanyOut)
@@ -332,35 +390,31 @@ def update_company(
     company_id: str,
     payload: CompanyUpdate,
     user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        company = _get_company_or_404(db, company_id)
-        if payload.name is not None:
-            company.name = payload.name
-        if payload.industry is not None:
-            company.industry = payload.industry
-        if payload.language_preference is not None:
-            company.language_preference = payload.language_preference
-        db.commit()
-        db.refresh(company)
-        return company
-    finally:
-        db.close()
+    company = _get_company_or_404(db, company_id)
+    if payload.name is not None:
+        company.name = payload.name
+    if payload.industry is not None:
+        company.industry = payload.industry
+    if payload.language_preference is not None:
+        company.language_preference = payload.language_preference
+    db.commit()
+    db.refresh(company)
+    return company
 
 
 @app.post("/companies/{company_id}/sync")
 @limiter.limit("20/minute")
 async def sync_company_now(
-    request: Request, company_id: str, user: dict = Depends(auth.get_current_user)
+    request: Request,
+    company_id: str,
+    user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-    finally:
-        db.close()
+    _get_company_or_404(db, company_id)
     count = await moss_sync.sync_company(company_id)
     return {"synced_documents": count}
 
@@ -381,28 +435,24 @@ def issue_call_role_token(
 
 
 @app.get("/companies/{company_id}/export")
-def export_company(company_id: str):
+def export_company(company_id: str, db: Session = Depends(get_db)):
     """Called by agent/src/moss_client.py's hydrate_session(). Left
     unauthenticated -- see the module docstring's scoping note."""
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        jobs = db.query(Job).filter(Job.company_id == company_id).all()
-        inventory = db.query(InventoryItem).filter(InventoryItem.company_id == company_id).all()
-        safety = db.query(SafetyProcedure).filter(SafetyProcedure.company_id == company_id).all()
+    _get_company_or_404(db, company_id)
+    jobs = db.query(Job).filter(Job.company_id == company_id).all()
+    inventory = db.query(InventoryItem).filter(InventoryItem.company_id == company_id).all()
+    safety = db.query(SafetyProcedure).filter(SafetyProcedure.company_id == company_id).all()
 
-        docs = [job_to_doc(j) for j in jobs]
-        docs += [inventory_to_doc(i) for i in inventory]
-        docs += [safety_to_doc(s) for s in safety]
-        docs.append(dispatch_queue_doc(company_id, jobs))
+    docs = [job_to_doc(j) for j in jobs]
+    docs += [inventory_to_doc(i) for i in inventory]
+    docs += [safety_to_doc(s) for s in safety]
+    docs.append(dispatch_queue_doc(company_id, jobs))
 
-        for job in jobs:
-            if job.priority:
-                docs.append(dispatch_reroute_doc(company_id, job))
+    for job in jobs:
+        if job.priority:
+            docs.append(dispatch_reroute_doc(company_id, job))
 
-        return {"documents": docs}
-    finally:
-        db.close()
+    return {"documents": docs}
 
 
 # ---------------------------------------------------------------------------
@@ -410,13 +460,9 @@ def export_company(company_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/companies/{company_id}/jobs", response_model=list[JobOut])
-def list_jobs(company_id: str):
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        return db.query(Job).filter(Job.company_id == company_id).all()
-    finally:
-        db.close()
+def list_jobs(company_id: str, db: Session = Depends(get_db)):
+    _get_company_or_404(db, company_id)
+    return db.query(Job).filter(Job.company_id == company_id).all()
 
 
 @app.post("/companies/{company_id}/jobs", response_model=JobOut, status_code=201)
@@ -427,28 +473,25 @@ def create_job(
     payload: JobIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        job = Job(
-            id=payload.id or _new_id(),
-            company_id=company_id,
-            equipment_id=payload.equipment_id,
-            site_id=payload.site_id,
-            fault_description=payload.fault_description,
-            resolution=payload.resolution,
-            status=payload.status,
-            priority=False,
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        _background_sync(company_id, background_tasks)
-        return job
-    finally:
-        db.close()
+    _get_company_or_404(db, company_id)
+    job = Job(
+        id=payload.id or _new_id(),
+        company_id=company_id,
+        equipment_id=payload.equipment_id,
+        site_id=payload.site_id,
+        fault_description=payload.fault_description,
+        resolution=payload.resolution,
+        status=payload.status,
+        priority=False,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    _background_sync(company_id, background_tasks)
+    return job
 
 
 @app.put("/companies/{company_id}/jobs/{job_id}", response_model=JobOut)
@@ -460,24 +503,21 @@ def update_job(
     payload: JobIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job.equipment_id = payload.equipment_id
-        job.site_id = payload.site_id
-        job.fault_description = payload.fault_description
-        job.resolution = payload.resolution
-        job.status = payload.status
-        db.commit()
-        db.refresh(job)
-        _background_sync(company_id, background_tasks)
-        return job
-    finally:
-        db.close()
+    job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job.equipment_id = payload.equipment_id
+    job.site_id = payload.site_id
+    job.fault_description = payload.fault_description
+    job.resolution = payload.resolution
+    job.status = payload.status
+    db.commit()
+    db.refresh(job)
+    _background_sync(company_id, background_tasks)
+    return job
 
 
 @app.delete("/companies/{company_id}/jobs/{job_id}", status_code=204)
@@ -488,18 +528,15 @@ def delete_job(
     job_id: str,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("supervisor", "dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        db.delete(job)
-        db.commit()
-        _background_sync(company_id, background_tasks)
-    finally:
-        db.close()
+    job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    db.delete(job)
+    db.commit()
+    _background_sync(company_id, background_tasks)
     return None
 
 
@@ -511,29 +548,26 @@ def reroute_job(
     job_id: str,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job.priority = True
-        event = DispatchEvent(
-            id=f"dispatch-{_new_id()}",
-            company_id=company_id,
-            job_id=job.id,
-            technician_id="",
-            event_type="reroute",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
-        db.add(event)
-        db.commit()
-        db.refresh(job)
-        _background_sync(company_id, background_tasks)
-        return job
-    finally:
-        db.close()
+    job = db.query(Job).filter(Job.company_id == company_id, Job.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job.priority = True
+    event = DispatchEvent(
+        id=f"dispatch-{_new_id()}",
+        company_id=company_id,
+        job_id=job.id,
+        technician_id="",
+        event_type="reroute",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(job)
+    _background_sync(company_id, background_tasks)
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -541,13 +575,9 @@ def reroute_job(
 # ---------------------------------------------------------------------------
 
 @app.get("/companies/{company_id}/inventory", response_model=list[InventoryOut])
-def list_inventory(company_id: str):
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        return db.query(InventoryItem).filter(InventoryItem.company_id == company_id).all()
-    finally:
-        db.close()
+def list_inventory(company_id: str, db: Session = Depends(get_db)):
+    _get_company_or_404(db, company_id)
+    return db.query(InventoryItem).filter(InventoryItem.company_id == company_id).all()
 
 
 @app.post("/companies/{company_id}/inventory", response_model=InventoryOut, status_code=201)
@@ -558,26 +588,23 @@ def create_inventory(
     payload: InventoryIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        item = InventoryItem(
-            id=payload.id or _new_id(),
-            company_id=company_id,
-            part_number=payload.part_number,
-            name=payload.name,
-            location=payload.location,
-            quantity=payload.quantity,
-        )
-        db.add(item)
-        db.commit()
-        db.refresh(item)
-        _background_sync(company_id, background_tasks)
-        return item
-    finally:
-        db.close()
+    _get_company_or_404(db, company_id)
+    item = InventoryItem(
+        id=payload.id or _new_id(),
+        company_id=company_id,
+        part_number=payload.part_number,
+        name=payload.name,
+        location=payload.location,
+        quantity=payload.quantity,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    _background_sync(company_id, background_tasks)
+    return item
 
 
 @app.put("/companies/{company_id}/inventory/{item_id}", response_model=InventoryOut)
@@ -589,27 +616,24 @@ def update_inventory(
     payload: InventoryIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        item = (
-            db.query(InventoryItem)
-            .filter(InventoryItem.company_id == company_id, InventoryItem.id == item_id)
-            .first()
-        )
-        if item is None:
-            raise HTTPException(status_code=404, detail="Inventory item not found")
-        item.part_number = payload.part_number
-        item.name = payload.name
-        item.location = payload.location
-        item.quantity = payload.quantity
-        db.commit()
-        db.refresh(item)
-        _background_sync(company_id, background_tasks)
-        return item
-    finally:
-        db.close()
+    item = (
+        db.query(InventoryItem)
+        .filter(InventoryItem.company_id == company_id, InventoryItem.id == item_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    item.part_number = payload.part_number
+    item.name = payload.name
+    item.location = payload.location
+    item.quantity = payload.quantity
+    db.commit()
+    db.refresh(item)
+    _background_sync(company_id, background_tasks)
+    return item
 
 
 @app.delete("/companies/{company_id}/inventory/{item_id}", status_code=204)
@@ -620,22 +644,19 @@ def delete_inventory(
     item_id: str,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("supervisor", "dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        item = (
-            db.query(InventoryItem)
-            .filter(InventoryItem.company_id == company_id, InventoryItem.id == item_id)
-            .first()
-        )
-        if item is None:
-            raise HTTPException(status_code=404, detail="Inventory item not found")
-        db.delete(item)
-        db.commit()
-        _background_sync(company_id, background_tasks)
-    finally:
-        db.close()
+    item = (
+        db.query(InventoryItem)
+        .filter(InventoryItem.company_id == company_id, InventoryItem.id == item_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    db.delete(item)
+    db.commit()
+    _background_sync(company_id, background_tasks)
     return None
 
 
@@ -645,13 +666,9 @@ def delete_inventory(
 # ---------------------------------------------------------------------------
 
 @app.get("/companies/{company_id}/safety-procedures", response_model=list[SafetyProcedureOut])
-def list_safety_procedures(company_id: str):
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        return db.query(SafetyProcedure).filter(SafetyProcedure.company_id == company_id).all()
-    finally:
-        db.close()
+def list_safety_procedures(company_id: str, db: Session = Depends(get_db)):
+    _get_company_or_404(db, company_id)
+    return db.query(SafetyProcedure).filter(SafetyProcedure.company_id == company_id).all()
 
 
 @app.post("/companies/{company_id}/safety-procedures", response_model=SafetyProcedureOut, status_code=201)
@@ -662,26 +679,23 @@ def create_safety_procedure(
     payload: SafetyProcedureIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("supervisor", "dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        proc = SafetyProcedure(
-            id=payload.id or _new_id(),
-            company_id=company_id,
-            equipment_type=payload.equipment_type,
-            section=payload.section,
-            text=payload.text,
-            source_manual=payload.source_manual,
-        )
-        db.add(proc)
-        db.commit()
-        db.refresh(proc)
-        _background_sync(company_id, background_tasks)
-        return proc
-    finally:
-        db.close()
+    _get_company_or_404(db, company_id)
+    proc = SafetyProcedure(
+        id=payload.id or _new_id(),
+        company_id=company_id,
+        equipment_type=payload.equipment_type,
+        section=payload.section,
+        text=payload.text,
+        source_manual=payload.source_manual,
+    )
+    db.add(proc)
+    db.commit()
+    db.refresh(proc)
+    _background_sync(company_id, background_tasks)
+    return proc
 
 
 @app.put("/companies/{company_id}/safety-procedures/{procedure_id}", response_model=SafetyProcedureOut)
@@ -693,27 +707,24 @@ def update_safety_procedure(
     payload: SafetyProcedureIn,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("supervisor", "dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        proc = (
-            db.query(SafetyProcedure)
-            .filter(SafetyProcedure.company_id == company_id, SafetyProcedure.id == procedure_id)
-            .first()
-        )
-        if proc is None:
-            raise HTTPException(status_code=404, detail="Safety procedure not found")
-        proc.equipment_type = payload.equipment_type
-        proc.section = payload.section
-        proc.text = payload.text
-        proc.source_manual = payload.source_manual
-        db.commit()
-        db.refresh(proc)
-        _background_sync(company_id, background_tasks)
-        return proc
-    finally:
-        db.close()
+    proc = (
+        db.query(SafetyProcedure)
+        .filter(SafetyProcedure.company_id == company_id, SafetyProcedure.id == procedure_id)
+        .first()
+    )
+    if proc is None:
+        raise HTTPException(status_code=404, detail="Safety procedure not found")
+    proc.equipment_type = payload.equipment_type
+    proc.section = payload.section
+    proc.text = payload.text
+    proc.source_manual = payload.source_manual
+    db.commit()
+    db.refresh(proc)
+    _background_sync(company_id, background_tasks)
+    return proc
 
 
 @app.delete("/companies/{company_id}/safety-procedures/{procedure_id}", status_code=204)
@@ -724,22 +735,19 @@ def delete_safety_procedure(
     procedure_id: str,
     background_tasks: BackgroundTasks,
     user: dict = Depends(auth.require_role("supervisor", "dispatcher")),
+    db: Session = Depends(get_db),
 ):
     auth.require_same_company(user, company_id)
-    db = SessionLocal()
-    try:
-        proc = (
-            db.query(SafetyProcedure)
-            .filter(SafetyProcedure.company_id == company_id, SafetyProcedure.id == procedure_id)
-            .first()
-        )
-        if proc is None:
-            raise HTTPException(status_code=404, detail="Safety procedure not found")
-        db.delete(proc)
-        db.commit()
-        _background_sync(company_id, background_tasks)
-    finally:
-        db.close()
+    proc = (
+        db.query(SafetyProcedure)
+        .filter(SafetyProcedure.company_id == company_id, SafetyProcedure.id == procedure_id)
+        .first()
+    )
+    if proc is None:
+        raise HTTPException(status_code=404, detail="Safety procedure not found")
+    db.delete(proc)
+    db.commit()
+    _background_sync(company_id, background_tasks)
     return None
 
 
@@ -749,40 +757,32 @@ def delete_safety_procedure(
 # ---------------------------------------------------------------------------
 
 @app.post("/companies/{company_id}/audit-log", response_model=AuditLogOut, status_code=201)
-def create_audit_log_entry(company_id: str, payload: AuditLogIn):
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        entry = AuditLogEntry(
-            id=f"audit-{_new_id()}",
-            company_id=company_id,
-            tool_name=payload.tool_name,
-            query_text=payload.query_text,
-            response_text=payload.response_text,
-            source_citation=payload.source_citation,
-            confidence_score=payload.confidence_score,
-            below_confidence_floor=payload.below_confidence_floor,
-            created_at=payload.created_at or datetime.now(timezone.utc).isoformat(),
-        )
-        db.add(entry)
-        db.commit()
-        db.refresh(entry)
-        return entry
-    finally:
-        db.close()
+def create_audit_log_entry(company_id: str, payload: AuditLogIn, db: Session = Depends(get_db)):
+    _get_company_or_404(db, company_id)
+    entry = AuditLogEntry(
+        id=f"audit-{_new_id()}",
+        company_id=company_id,
+        tool_name=payload.tool_name,
+        query_text=payload.query_text,
+        response_text=payload.response_text,
+        source_citation=payload.source_citation,
+        confidence_score=payload.confidence_score,
+        below_confidence_floor=payload.below_confidence_floor,
+        created_at=payload.created_at or datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 
 @app.get("/companies/{company_id}/audit-log", response_model=list[AuditLogOut])
-def list_audit_log(company_id: str, limit: int = 200):
-    db = SessionLocal()
-    try:
-        _get_company_or_404(db, company_id)
-        return (
-            db.query(AuditLogEntry)
-            .filter(AuditLogEntry.company_id == company_id)
-            .order_by(AuditLogEntry.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-    finally:
-        db.close()
+def list_audit_log(company_id: str, limit: int = 200, db: Session = Depends(get_db)):
+    _get_company_or_404(db, company_id)
+    return (
+        db.query(AuditLogEntry)
+        .filter(AuditLogEntry.company_id == company_id)
+        .order_by(AuditLogEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )

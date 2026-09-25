@@ -216,11 +216,11 @@ Open `http://localhost:3000`.
 ## Testing
 
 ```powershell
-# Agent -- all five tools, company routing, offline write queueing, RBAC
+# Agent -- 88 tests: tools, company routing, sync queue, connectivity, tracing, local pipeline
 cd agent
 uv run pytest -v
 
-# Backend -- every endpoint group, role rules, tenant isolation (91 tests)
+# Backend -- 97 tests: endpoint groups, role rules, tenant isolation, rate limiting
 cd ..\backend
 uv run pytest -v
 
@@ -241,11 +241,9 @@ pull request to `main`:
 
 | Workflow | What it runs |
 |---|---|
-| `agent-ci.yml` | `uv sync`, ruff (fatal-error rules), full agent test suite |
-| `backend-ci.yml` | `uv sync`, ruff, `alembic upgrade head` (twice) against a Postgres 16 container, full backend test suite |
+| `agent-ci.yml` | `uv sync`, ruff check, full agent test suite (88 tests) |
+| `backend-ci.yml` | `uv sync`, ruff check, full backend test suite (97 tests) |
 | `dashboard-ci.yml` | `npm ci`, `npm run lint`, `npm run build` |
-
-Branch protection on `main` requires all three to pass before merging.
 
 ## Safety & audit trail (Phase 6)
 
@@ -258,26 +256,40 @@ Branch protection on `main` requires all three to pass before merging.
   tripped the confidence floor.
 - Audit logging never adds latency to a voice response (it's fire-and-forget
   in the background) and never fails a tool call — if the FastAPI backend is
-  briefly unreachable, entries buffer to disk under `agent/_audit_buffer/`
+  briefly unreachable, entries buffer into `_sync_queue.sqlite3`
   and are automatically replayed with their original timestamp once the
   backend is reachable again.
-- View the trail per company at **Dashboard → \[Company\] → Audit log**.
+- View the trail per company at **Dashboard → [Company] → Audit log**.
 
-## Connectivity model & degraded operation
+## Connectivity model & edge deployment
 
-FieldLine distinguishes between full connectivity, degraded backend connectivity, and complete signal loss (see `docs/CONNECTIVITY_MODEL.md` for the comprehensive specification):
+FieldLine supports three distinct operational tiers (see `docs/CONNECTIVITY_MODEL.md` for the full architecture):
 
 | Tier | Status | What works |
 |---|---|---|
-| **Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss all online | Cloud STT/LLM/TTS, live sync to Moss and Postgres |
-| **Degraded connectivity** | WebRTC voice connection stays up; backend/Moss drops | Retrieval continues via in-memory local Moss session; notes and audit entries buffer to SQLite via `sync_queue.py` and replay on reconnect |
-| **Total signal loss** | Phone has zero internet/cellular signal | Cloud-hosted agent cannot receive audio; self-hosted on-prem edge box (using local faster-whisper/Ollama/Piper stack) is the scoped path |
+| **Tier 1: Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss all online | Cloud STT/LLM/TTS (Groq, GPT-OSS, Fish Audio), live sync to Moss and Postgres |
+| **Tier 2: Degraded connectivity** | WebRTC voice connection stays up; backend/Moss drops | Retrieval continues via in-memory local Moss session; notes and audit entries buffer to SQLite via `sync_queue.py` and replay on reconnect; single debounced voice advisory |
+| **Tier 3: Edge deployment (Zero Internet)** | Phone ↔ Local Wi-Fi / Hotspot ↔ Self-hosted LiveKit Server + Local Agent Stack + SQLite | **100% autonomous on-site operation**: CPU faster-whisper STT, Ollama LLM (`llama3.2:3b`), Piper TTS, local session index, SQLite backend. Zero internet needed. Drains upstream when WAN returns. |
+
+### Running Edge Mode (Zero Internet)
+
+```powershell
+# One-command full stack via Docker Compose:
+docker compose -f docker-compose.edge.yml up
+
+# Or run natively:
+# 1. livekit-server --config livekit-edge.yaml --dev --bind 0.0.0.0
+# 2. ollama run llama3.2:3b
+# 3. cd agent && uv run python src/local_tts_server.py
+# 4. cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000
+# 5. cd agent && set FIELDLINE_EDGE_MODE=1 && uv run python src/agent.py dev
+```
 
 ## Offline & degraded connectivity rehearsal
 
 1. Start a call from the dashboard's **Talk to agent** tab.
-2. Ask a question (e.g. "What's the fault history on unit twelve?").
-3. Simulate backend/Moss drop (or run locally with network toggled).
+2. Ask a question (e.g. "What's the lockout procedure for panel B?").
+3. Simulate backend/Moss drop (or stop the backend process).
 4. Ask another question — the agent continues answering using its local in-memory session index; new job notes and audit entries are durably queued into `_sync_queue.sqlite3`.
 5. Restore connectivity — the sync queue automatically drains and pushes queued writes to the cloud with exponential backoff and idempotency protection.
 

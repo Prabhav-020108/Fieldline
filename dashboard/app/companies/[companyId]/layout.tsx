@@ -8,6 +8,7 @@ import { RefreshCw } from "lucide-react";
 import { getCompany, syncCompanyNow } from "@/lib/api";
 import { INDUSTRIES, type Company } from "@/lib/types";
 import { Badge, Button, InlineNote, Spinner } from "@/components/ui";
+import { ConnectivityIndicator } from "@/components/ConnectivityIndicator";
 
 const TABS: { href: string; label: string }[] = [
   { href: "", label: "Overview" },
@@ -114,6 +115,7 @@ function CompanyLayoutInner({
               )}
             </div>
             <div className="flex items-center gap-3">
+              <ConnectivityIndicator />
               {syncResult ? <InlineNote tone={syncResult.tone}>{syncResult.message}</InlineNote> : null}
               <Button
                 variant="secondary"

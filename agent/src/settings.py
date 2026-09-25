@@ -12,6 +12,8 @@ in backend/.env -- it's what lets agent/src/role_cache.py verify a
 call-role token the backend minted, using nothing but local cryptography.
 """
 
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +24,10 @@ class Settings(BaseSettings):
     moss_project_key: str
     fieldline_jwt_secret: str
     fieldline_backend_url: str = "http://localhost:8000"
+
+    # Observability
+    sentry_dsn: Optional[str] = None
+    environment: str = "production"
 
 
 settings = Settings()

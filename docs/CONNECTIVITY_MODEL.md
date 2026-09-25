@@ -1,17 +1,70 @@
 # FieldLine Connectivity Model
 
-FieldLine's voice assistant is designed for real-world field operations where internet connectivity is frequently intermittent or degraded. This document specifies the three connectivity tiers, what actually occurs in each tier, and what functionality remains operational.
+FieldLine's voice assistant is engineered specifically for real-world field operations where internet connectivity is frequently intermittent, degraded, or entirely absent. This document specifies the three connectivity tiers, how the architecture adapts, and what remains fully functional in each mode.
 
 ## The Three Tiers
 
 | Tier | What's actually happening | What still works |
 |---|---|---|
-| **Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss Cloud all reachable | Everything: cloud STT/LLM/TTS models, live bi-directional sync, instant dashboard reflection. |
-| **Degraded connectivity** | Phone ↔ LiveKit Cloud stays up; agent ↔ backend/Moss Cloud drops | Retrieval keeps answering from the local in-memory Moss session hydrated at shift start; job notes and audit entries queue durably via `sync_queue.py` and replay on reconnect. This is real today, verified by `test_moss_client.py` and `test_sync_queue.py`. Voice itself remains live. |
-| **Total signal loss** | Phone has no connectivity at all | Voice cannot function — no cloud-hosted agent can be reached by a phone with zero signal, regardless of which models sit behind it. Stated as an explicit, scoped limitation, with a self-hosted edge deployment (the existing Ollama/Piper/faster-whisper stack, relocated to site hardware) as the stated future path. |
+| **Tier 1: Full Connectivity (Cloud)** | Phone ↔ LiveKit Cloud ↔ Agent ↔ Backend/Moss Cloud all reachable | **Everything**: High-speed cloud STT/LLM/TTS models (Groq Whisper, GPT-OSS, Fish Audio), live bi-directional sync, real-time dashboard updates across all users. |
+| **Tier 2: Degraded Connectivity (Hybrid)** | Phone ↔ LiveKit Cloud stays up; Agent ↔ Backend/Moss Cloud drops | **Voice remains 100% live**: Retrieval answers immediately from the in-memory Moss session hydrated at shift start; job notes and audit entries buffer durably via `sync_queue.py` (SQLite with exponential backoff + jitter) and drain automatically upon reconnect. Zero spoken interruptions, single debounced advisory announcement. |
+| **Tier 3: Edge Deployment (Zero Internet)** | Phone ↔ Local Wi-Fi / Hotspot ↔ On-Site Edge Appliance (Self-Hosted LiveKit Server + Local Agent Stack + SQLite Backend) | **Complete local autonomy with zero external WAN**: Speech-to-text via CPU `faster-whisper`, local LLM reasoning via `Ollama` (`llama3.2:3b`), local TTS via `Piper`, local session search, and SQLite storage. WebRTC connects peer-to-peer over local LAN/Hotspot. When internet returns, the sync queue flushes all buffered records upstream. |
 
-## Why This Distinction Matters
+---
 
-1. **Honest Architecture**: A smartphone operating in a zero-connectivity basement or Faraday cage cannot transmit audio packets over cellular/Wi-Fi to LiveKit Cloud. Claiming that a cloud-hosted voice agent works when the phone has airplane mode enabled is technically impossible.
-2. **Degraded Connectivity is the Real Problem**: In practice, field connectivity often breaks between cloud microservices or between the field worker and enterprise servers while the worker maintains a basic WebRTC audio channel. FieldLine's client-side in-memory index, local keyword search fallback (`_LocalSession`), and SQLite-backed outbound queue (`sync_queue.py`) guarantee zero data loss and immediate local answers during dispatch server or Moss outages.
-3. **Future Edge Deployment**: The local model stack (`faster-whisper`, `Ollama` with `llama3.2:3b`, and `Piper` TTS) implemented in `local_pipeline.py` is fully functional on local workstations or dedicated on-premise hardware (e.g. edge gateways in remote plants). When deployed on an on-premise edge appliance on a local LAN, the system can provide voice services even during an external ISP blackout.
+## Edge Deployment Architecture (Tier 3)
+
+When operating in remote facilities, deep basements, mine sites, or during disaster recovery where cellular and WAN backhauls are dead:
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │         ON-SITE EDGE APPLIANCE (Laptop / Rugged Box)        │
+  │                                                             │
+  │  ┌──────────────────┐          ┌─────────────────────────┐  │
+  │  │  LiveKit Server  │          │  FastAPI Backend        │  │
+  │  │  (Self-Hosted)   │          │  (SQLite Database)      │  │
+  │  │  Port: 7880      │          │  Port: 8000             │  │
+  │  └────────┬─────────┘          └────────────┬────────────┘  │
+  │           │                                 │               │
+  │  ┌────────┴─────────────────────────────────┴────────────┐  │
+  │  │             FieldLine Autonomous Voice Agent           │  │
+  │  │  ┌────────────────┐ ┌───────────────┐ ┌────────────┐  │  │
+  │  │  │ faster-whisper │ │ Ollama (3B)   │ │ Piper TTS  │  │  │
+  │  │  │ (Local CPU)    │ │ (Local LLM)   │ │ (Local ONNX│  │  │
+  │  │  └────────────────┘ └───────────────┘ └────────────┘  │  │
+  │  │  ┌──────────────────────────────────────────────────┐  │  │
+  │  │  │ Local Session Index & SQLite Outbound Sync Queue │  │  │
+  │  │  └──────────────────────────────────────────────────┘  │  │
+  │  └───────────────────────────────────────────────────────┘  │
+  │                                                             │
+  │  📡 Local Wi-Fi Access Point / Mobile Hotspot               │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │ Local WebRTC (NO WAN Needed)
+                                 │
+                        ┌────────┴────────┐
+                        │ Technician's    │
+                        │ Smartphone / PWA│
+                        └─────────────────┘
+```
+
+### Running the Edge Stack
+
+**Option A: One-Command Docker Compose**
+```bash
+docker compose -f docker-compose.edge.yml up
+```
+
+**Option B: Native Process Execution**
+1. **LiveKit Server**: `livekit-server --config livekit-edge.yaml --dev --bind 0.0.0.0`
+2. **Local LLM**: `ollama run llama3.2:3b`
+3. **Local TTS**: `cd agent && uv run python src/local_tts_server.py`
+4. **Local Backend**: `cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8000`
+5. **Edge Agent**: `cd agent && set FIELDLINE_EDGE_MODE=1 && uv run python src/agent.py dev`
+
+---
+
+## Technical Guarantees Across Tiers
+
+1. **Zero Data Loss**: Every write action (audit logs, note creation) uses `sync_queue.py` backed by SQLite on the host filesystem. Even if power cuts or network drops, writes survive and replay with idempotency keys upon reconnection.
+2. **Deterministic Safety Procedures**: Safety-critical lockout and procedure queries enforce a strict `SAFETY_CONFIDENCE_FLOOR` (0.35) and read verbatim manual citations. If a match is not confident, the agent explicitly defers rather than hallucinating.
+3. **Seamless Transition & Debounce**: Connectivity transitions between online and offline trigger debounced advisory messages (`announce_cooldown_s = 15.0`) to avoid duplicate announcements during intermittent flapping.

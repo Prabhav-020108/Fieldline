@@ -212,7 +212,8 @@ async def _periodic_loop(interval_seconds: float) -> None:
     while True:
         await asyncio.sleep(interval_seconds)
         try:
-            await process_due_ops()
+            if connectivity.is_online:
+                await process_due_ops()
         except Exception:
             logger.exception("periodic sync_queue flush failed")
 

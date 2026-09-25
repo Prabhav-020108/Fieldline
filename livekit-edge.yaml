@@ -1,0 +1,11 @@
+# livekit-edge.yaml - self-hosted LiveKit Server for edge deployment (zero-internet)
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: false
+  tcp_fallback_port: 7881
+keys:
+  devkey: secret
+logging:
+  level: info

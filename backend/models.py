@@ -103,8 +103,18 @@ class User(Base):
 # pool_pre_ping checks a pooled connection is still alive before handing
 # it to a request -- worth having once the database is a network hop
 # away (Supabase) rather than a local file.
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+#
+# Edge / test mode: if DATABASE_URL points at SQLite, pass
+# check_same_thread=False so FastAPI's thread-pool workers can share the
+# same connection without a "created in a thread" crash.
+_is_sqlite = settings.database_url.startswith("sqlite")
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+)
 SessionLocal = sessionmaker(bind=engine)
+
 
 
 def init_db():

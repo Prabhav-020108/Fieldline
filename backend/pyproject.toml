@@ -21,6 +21,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "alembic>=1.13.0",
     "pydantic-settings>=2.0.0",
+    "sentry-sdk>=2.0.0",
 ]
 
 [dependency-groups]
@@ -39,3 +40,16 @@ constraint-dependencies = ["yarl<1.24"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    ".git",
+    ".venv",
+    "migrations",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E402"]

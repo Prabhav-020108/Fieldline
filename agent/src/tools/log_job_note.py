@@ -6,7 +6,7 @@ from livekit.agents import RunContext, function_tool
 from moss import DocumentInfo, MutationOptions
 
 from audit_log import log_tool_call_background
-from company_context import get_current_room_name, get_current_role
+from company_context import get_current_role, get_current_room_name
 from connectivity import connectivity
 from moss_client import get_index
 from tracing import prompt_hash, traced_stage

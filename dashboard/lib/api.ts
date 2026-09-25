@@ -239,3 +239,31 @@ export const listAuditLog = (companyId: string, limit = 200) =>
   request<AuditLogEntry[]>(
     `/companies/${companyId}/audit-log?limit=${limit}`
   );
+
+// ---------------------------------------------------------------------------
+// Health & Connectivity Check
+// ---------------------------------------------------------------------------
+
+export type ConnectivityStatus = "online" | "edge" | "offline";
+
+export async function checkBackendHealth(): Promise<{ status: ConnectivityStatus; url: string }> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${API_BASE}/health`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const isLocal =
+        API_BASE.includes("localhost") ||
+        API_BASE.includes("127.0.0.1") ||
+        API_BASE.includes(":8000");
+      return { status: isLocal ? "edge" : "online", url: API_BASE };
+    }
+    return { status: "offline", url: API_BASE };
+  } catch {
+    return { status: "offline", url: API_BASE };
+  }
+}

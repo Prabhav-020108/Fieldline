@@ -14,6 +14,8 @@ that platform's own environment/secret store (Render calls this an
 "Environment Group") -- never from a committed .env file.
 """
 
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +33,10 @@ class Settings(BaseSettings):
     # The default is local development only; set CORS_ALLOWED_ORIGINS in
     # Render to include the deployed Vercel dashboard URL.
     cors_allowed_origins: str = "http://localhost:3000"
+
+    # Observability
+    sentry_dsn: Optional[str] = None
+    environment: str = "production"
 
 
 settings = Settings()

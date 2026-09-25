@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import textwrap
+import time
 
 from dotenv import load_dotenv
 
@@ -21,16 +22,11 @@ from livekit.agents import (
 )
 from livekit.plugins import groq
 
-from tools.dispatch_status import dispatch_status
-from tools.fault_history import fault_history
-from tools.inventory_lookup import inventory_lookup
-from tools.log_job_note import log_job_note
-from tools.safety_procedure import safety_procedure
-
-# Phase 4 additions -- offline-first pipeline and data layer.
-from connectivity import connectivity
-from local_pipeline import build_hybrid_llm, build_hybrid_stt, build_hybrid_tts, warm_up_local_stt
-from moss_client import get_index
+# Phase 8d addition -- one shared, durable, retrying outbound queue for
+# audit-log entries and queued Moss writes. Importing audit_log and
+# moss_client above already registers their sync_queue handlers; this
+# import is just for sync_queue.start() below.
+import sync_queue
 
 # Phase 5 addition -- multi-tenant company identity, resolved once per call
 # from the room name.
@@ -41,20 +37,45 @@ from company_context import (
     set_current_room_name,
 )
 
-# Phase 8d addition -- one shared, durable, retrying outbound queue for
-# audit-log entries and queued Moss writes. Importing audit_log and
-# moss_client above already registers their sync_queue handlers; this
-# import is just for sync_queue.start() below.
-import sync_queue
+# Phase 4 additions -- offline-first pipeline and data layer.
+from connectivity import connectivity
+from local_pipeline import (
+    build_hybrid_llm,
+    build_hybrid_stt,
+    build_hybrid_tts,
+    build_local_llm,
+    build_local_stt,
+    build_local_tts,
+    warm_up_local_stt,
+)
+from moss_client import get_index
 
 # Phase 8c addition -- offline-capable role verification.
 from role_cache import verify_role_token
 from settings import settings
+from tools.dispatch_status import dispatch_status
+from tools.fault_history import fault_history
+from tools.inventory_lookup import inventory_lookup
+from tools.log_job_note import log_job_note
+from tools.safety_procedure import safety_procedure
 
 # Phase 7 addition -- LLM observability.
 from tracing import record_stage_span
 
 logger = logging.getLogger("fieldline-agent")
+
+# Observability: Sentry error tracking if configured
+if settings.sentry_dsn:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            traces_sample_rate=1.0,
+            environment=settings.environment,
+        )
+        logger.info("Sentry monitoring initialized (env=%s)", settings.environment)
+    except Exception as e:
+        logger.warning("Could not initialize Sentry: %s", e)
 
 FIELDLINE_INSTRUCTIONS = textwrap.dedent(
     """\
@@ -190,8 +211,9 @@ async def entrypoint(ctx: JobContext) -> None:
             import httpx as _httpx
             async with _httpx.AsyncClient(timeout=5) as c:
                 await c.get("http://localhost:11434/api/tags")
-            from local_pipeline import build_local_llm
             from livekit.agents.llm import ChatContext
+
+            from local_pipeline import build_local_llm
             _warm_llm = build_local_llm()
             _ctx = ChatContext()
             _ctx.add_message(role="user", content="Say OK")
@@ -212,27 +234,58 @@ async def entrypoint(ctx: JobContext) -> None:
     if os.environ.get("FIELDLINE_CLOUD_DEPLOY") != "1":
         asyncio.create_task(_warm_up_llm())
 
-    cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
-    cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
-    cloud_tts = inference.TTS(
-        model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
-    )
+    if os.environ.get("FIELDLINE_EDGE_MODE") == "1":
+        logger.info("edge mode enabled: initializing local STT, TTS, and LLM pipeline only")
+        session = AgentSession(
+            stt=build_local_stt(),
+            tts=build_local_tts(),
+            turn_handling=TurnHandlingOptions(
+                turn_detection=inference.TurnDetector(),
+                interruption={"mode": "adaptive"},
+                preemptive_generation={"enabled": True},
+            ),
+        )
+        active_llm = build_local_llm()
+    else:
+        cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
+        cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
+        cloud_tts = inference.TTS(
+            model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
+        )
 
-    session = AgentSession(
-        stt=build_hybrid_stt(cloud_stt),
-        tts=build_hybrid_tts(cloud_tts),
-        turn_handling=TurnHandlingOptions(
-            turn_detection=inference.TurnDetector(),
-            interruption={"mode": "adaptive"},
-            preemptive_generation={"enabled": True},
-        ),
-    )
+        session = AgentSession(
+            stt=build_hybrid_stt(cloud_stt),
+            tts=build_hybrid_tts(cloud_tts),
+            turn_handling=TurnHandlingOptions(
+                turn_detection=inference.TurnDetector(),
+                interruption={"mode": "adaptive"},
+                preemptive_generation={"enabled": True},
+            ),
+        )
+        active_llm = build_hybrid_llm(cloud_llm)
 
     # Phase 8f: tell the technician, once, briefly, whenever the
-    # connectivity path actually changes -- never silently. Both handlers
-    # only fire on a genuine transition (connectivity.py's
-    # mark_offline()/mark_online() already de-duplicate this).
+    # connectivity path actually changes -- never silently.
+    #
+    # Debounce: connectivity.py's mark_offline()/mark_online() already
+    # guard against firing callbacks on a non-transition, but multiple
+    # rapid failures (e.g. audit_log POST + sync_queue startup both
+    # failing within ms of each other) can each cause their own
+    # mark_offline() call before the first callback has even started.
+    # The _ANNOUNCE_COOLDOWN_S window below is a second, cheap safety net
+    # that prevents the technician from hearing the same announcement
+    # multiple times in one go.
+    announce_cooldown_s = 15.0
+    _last_offline_announce: float = 0.0
+    _last_online_announce: float = 0.0
+
     async def _announce_offline() -> None:
+        nonlocal _last_offline_announce
+        now = time.monotonic()
+        if now - _last_offline_announce < announce_cooldown_s:
+            logger.debug("offline announcement debounced (%.1fs since last)", now - _last_offline_announce)
+            return
+        _last_offline_announce = now
         try:
             await session.generate_reply(
                 instructions=(
@@ -248,6 +301,12 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.exception("failed to announce offline transition (call was unaffected)")
 
     async def _announce_reconnect() -> None:
+        nonlocal _last_online_announce
+        now = time.monotonic()
+        if now - _last_online_announce < announce_cooldown_s:
+            logger.debug("reconnect announcement debounced (%.1fs since last)", now - _last_online_announce)
+            return
+        _last_online_announce = now
         try:
             await session.generate_reply(
                 instructions=(
@@ -293,7 +352,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session.on("metrics_collected", _on_metrics_collected)
 
     await session.start(
-        agent=FieldLineAssistant(llm=build_hybrid_llm(cloud_llm)),
+        agent=FieldLineAssistant(llm=active_llm),
         room=ctx.room,
     )
 

@@ -26,17 +26,18 @@ import os
 import tempfile
 
 import httpx
+import openai as _openai_sdk  # the raw openai SDK, for custom client config
 from livekit import rtc
 from livekit.agents import APIConnectOptions, llm, stt, tts
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+
 # Plugin imports MUST happen at module level (import time, main thread), not
 # lazily inside a function called from within the job's async entrypoint --
 # LiveKit's plugin registration raises "Plugins must be registered on the
 # main thread" if you defer these. This matches how agent.py already
 # imports `groq` at the top instead of inside entrypoint().
 from livekit.plugins import openai, silero
-import openai as _openai_sdk  # the raw openai SDK, for custom client config
 
 logger = logging.getLogger("fieldline.local_pipeline")
 
@@ -218,8 +219,8 @@ def _get_local_model_path(model_size: str) -> str | None:
     error rather than gracefully falling back to a download.
     """
     try:
+
         from huggingface_hub import scan_cache_dir
-        import pathlib
 
         repo_id = f"Systran/faster-whisper-{model_size}"
         for repo in scan_cache_dir().repos:
