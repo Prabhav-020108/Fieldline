@@ -55,7 +55,7 @@ DB_PATH = os.path.join(_THIS_DIR, "..", "_sync_queue.sqlite3")
 BASE_DELAY_S = 30.0
 MAX_DELAY_S = 300.0
 JITTER_S = 5.0
-MAX_ATTEMPTS = 10  # beyond this, stop retrying and log loudly rather than retry forever
+MAX_ATTEMPTS = 50  # generous cap so temporary outages never drop field records
 
 _handlers: dict[str, Callable[[str, dict], Awaitable[bool]]] = {}
 _db_lock = asyncio.Lock()
@@ -126,20 +126,29 @@ async def enqueue(*, op_type: str, company_id: str, payload: dict, idempotency_k
     logger.info("queued %s for company %r (key=%r)", op_type, company_id, idempotency_key)
 
 
-async def process_due_ops() -> None:
+async def process_due_ops(force: bool = False) -> None:
     """Run every currently-due row through its registered handler. Safe
     to call repeatedly (periodic loop) or on-demand (connectivity's
-    on_reconnect hook)."""
+    on_reconnect hook).
+
+    When force=True (e.g. on reconnect), all queued rows are processed
+    immediately without waiting for backoff timers.
+    """
 
     def _read_due() -> list[tuple]:
         conn = _get_connection()
         try:
             now = time.time()
-            cursor = conn.execute(
-                "SELECT id, op_type, company_id, payload, attempts FROM sync_queue "
-                "WHERE next_attempt_at <= ? ORDER BY id",
-                (now,),
-            )
+            if force:
+                cursor = conn.execute(
+                    "SELECT id, op_type, company_id, payload, attempts FROM sync_queue ORDER BY id"
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT id, op_type, company_id, payload, attempts FROM sync_queue "
+                    "WHERE next_attempt_at <= ? ORDER BY id",
+                    (now,),
+                )
             return cursor.fetchall()
         finally:
             conn.close()
@@ -223,12 +232,14 @@ def start(periodic_interval_seconds: float = 30.0) -> None:
     once."""
     global _reconnect_hook_registered, _periodic_task
     if not _reconnect_hook_registered:
-        connectivity.on_reconnect(process_due_ops)
+        async def _on_reconnect():
+            logger.info("reconnected to dispatch -- forcing immediate flush of all queued ops")
+            await process_due_ops(force=True)
+
+        connectivity.on_reconnect(_on_reconnect)
         _reconnect_hook_registered = True
-    # Catch up immediately on anything queued from a previous run (e.g.
-    # this process restarted while offline, so the normal
-    # offline -> online transition that triggers on_reconnect never
-    # fired) -- fire-and-forget, exactly like the periodic loop below.
-    asyncio.create_task(process_due_ops())
+    # Catch up immediately on anything queued from a previous run --
+    # force=True so it drains immediately on startup
+    asyncio.create_task(process_due_ops(force=True))
     if _periodic_task is None:
         _periodic_task = asyncio.create_task(_periodic_loop(periodic_interval_seconds))

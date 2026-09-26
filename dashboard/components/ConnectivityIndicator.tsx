@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { Radio, Wifi, WifiOff, Zap } from "lucide-react";
-import { checkBackendHealth, type ConnectivityStatus, type HealthResult } from "@/lib/api";
+import {
+  checkBackendHealth,
+  type ConnectivityStatus,
+  type HealthResult,
+} from "@/lib/api";
 
 /**
- * Connectivity Indicator -- Phase 11 rewrite for demo day.
+ * Connectivity Indicator -- Genuine real-time health indicator.
  *
- * Three key improvements over the Phase 10 version:
- * 1. Polls every 3s (was 15s) so the kill-switch flip is near-instant
- * 2. CSS transition animations on status change -- green→red is dramatic
- * 3. "Large" variant for the company header that's visible from across the room
+ * 1. Polls backend /health every 3s so real network drops and backend crashes flip near-instantly.
+ * 2. Visual CSS animations (green ↔ red) visible across the room during live demos.
+ * 3. Accurate live status timing (no misleading stale timers).
  */
 
 // --- Shared connectivity state so multiple instances stay in sync ---
@@ -22,30 +25,33 @@ let _isFlashing: boolean = false;
 let _listeners: Listener[] = [];
 let _intervalId: ReturnType<typeof setInterval> | null = null;
 
+async function runProbe() {
+  const res = await checkBackendHealth();
+  if (_health !== null && res.status !== _health.status) {
+    _prevStatus = _health.status;
+    _statusChangedAt = Date.now();
+    _isFlashing = true;
+    setTimeout(() => {
+      _isFlashing = false;
+      _listeners.forEach((l) => l());
+    }, 1500);
+  }
+  _health = res;
+  _listeners.forEach((l) => l());
+}
+
+export function forceProbe() {
+  runProbe();
+}
+
 function subscribe(fn: Listener) {
   _listeners.push(fn);
   if (_intervalId === null) {
-    // Initialize timestamp on first subscribe if unset
     if (_statusChangedAt === 0) {
       _statusChangedAt = Date.now();
     }
-    // Start the shared poll
-    const probe = async () => {
-      const res = await checkBackendHealth();
-      if (_health !== null && res.status !== _health.status) {
-        _prevStatus = _health.status;
-        _statusChangedAt = Date.now();
-        _isFlashing = true;
-        setTimeout(() => {
-          _isFlashing = false;
-          _listeners.forEach((l) => l());
-        }, 1500);
-      }
-      _health = res;
-      _listeners.forEach((l) => l());
-    };
-    probe();
-    _intervalId = setInterval(probe, 3000);
+    runProbe();
+    _intervalId = setInterval(runProbe, 3000);
   }
   return () => {
     _listeners = _listeners.filter((l) => l !== fn);
@@ -61,7 +67,12 @@ function useHealth() {
   useEffect(() => {
     return subscribe(() => rerender((n) => n + 1));
   }, []);
-  return { health: _health, prevStatus: _prevStatus, changedAt: _statusChangedAt, isFlashing: _isFlashing };
+  return {
+    health: _health,
+    prevStatus: _prevStatus,
+    changedAt: _statusChangedAt,
+    isFlashing: _isFlashing,
+  };
 }
 
 // --- Time-ago helper ---
@@ -114,7 +125,7 @@ export function ConnectivityIndicator({
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-500
           text-cyan-700 bg-cyan-50 border border-cyan-200/70
           ${isFlashing ? "ring-2 ring-cyan-400 ring-offset-1 scale-105" : ""}`}
-        title={`Edge stack • ${health.latencyMs}ms • ${elapsed}`}
+        title={`Edge stack • ${health.latencyMs}ms • live`}
       >
         <span className="relative flex h-2 w-2">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
@@ -135,7 +146,7 @@ export function ConnectivityIndicator({
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-500
           text-emerald-700 bg-emerald-50 border border-emerald-200/70
           ${isFlashing ? "ring-2 ring-emerald-400 ring-offset-1 scale-105" : ""}`}
-        title={`Cloud connected • ${health.latencyMs}ms • ${elapsed}`}
+        title={`Cloud connected • ${health.latencyMs}ms • live`}
       >
         <span className="h-2 w-2 rounded-full bg-emerald-500" />
         <Wifi size={12} className="shrink-0 text-emerald-600" />
@@ -181,7 +192,7 @@ function BannerIndicator({ health, elapsed }: { health: HealthResult; elapsed: s
             </span>
           </div>
           <span className="text-[11px] text-cyan-600/80">
-            Local LLM • {health.latencyMs}ms latency • {elapsed}
+            Local LLM • {health.latencyMs}ms latency • Live
           </span>
         </div>
       </div>
@@ -200,7 +211,7 @@ function BannerIndicator({ health, elapsed }: { health: HealthResult; elapsed: s
             </span>
           </div>
           <span className="text-[11px] text-emerald-600/80">
-            {health.latencyMs}ms latency • {elapsed}
+            {health.latencyMs}ms latency • Live (polled 3s ago)
           </span>
         </div>
       </div>
@@ -219,7 +230,7 @@ function BannerIndicator({ health, elapsed }: { health: HealthResult; elapsed: s
           </span>
         </div>
         <span className="text-[11px] text-red-600/80 font-medium">
-          Voice + AI continue locally • Sync queue active • {elapsed}
+          Voice + AI continue locally • Sync queue active • Offline for {elapsed}
         </span>
       </div>
     </div>

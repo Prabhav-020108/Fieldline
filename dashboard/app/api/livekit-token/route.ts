@@ -14,14 +14,17 @@ export async function GET(req: NextRequest) {
   const identity =
     req.nextUrl.searchParams.get("identity") ??
     `dispatcher-${Math.random().toString(36).slice(2, 8)}`;
-  // Phase 8c: an optional short-lived JWT minted by
-  // POST /companies/{id}/call-role-token, carried as participant metadata
-  // so agent/src/role_cache.py can verify it locally, offline-capable,
-  // once the call has started.
-  const roleToken = req.nextUrl.searchParams.get("roleToken") ?? undefined;
+  const roleToken = req.nextUrl.searchParams.get("roleToken");
 
   if (!room) {
     return NextResponse.json({ error: "Missing 'room' query parameter" }, { status: 400 });
+  }
+
+  if (!roleToken) {
+    return NextResponse.json(
+      { error: "Authentication required: A verified role token is required to connect to the voice dispatch agent." },
+      { status: 401 }
+    );
   }
 
   const apiKey = process.env.LIVEKIT_API_KEY;

@@ -23,9 +23,8 @@ from livekit.agents import (
 from livekit.plugins import groq
 
 # Phase 8d addition -- one shared, durable, retrying outbound queue for
-# audit-log entries and queued Moss writes. Importing audit_log and
-# moss_client above already registers their sync_queue handlers; this
-# import is just for sync_queue.start() below.
+# audit-log entries and queued Moss writes.
+import audit_log  # noqa: F401
 import sync_queue
 
 # Phase 5 addition -- multi-tenant company identity, resolved once per call
@@ -250,7 +249,13 @@ async def entrypoint(ctx: JobContext) -> None:
         cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
         cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
         cloud_tts = inference.TTS(
-            model="fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"
+            model="cartesia/sonic-3",
+            fallback=[
+                {
+                    "model": "fishaudio/s2.1-pro",
+                    "voice": "fa4c9eb3dccc4806b382b40d61c6b10a",
+                }
+            ],
         )
 
         session = AgentSession(
@@ -287,16 +292,11 @@ async def entrypoint(ctx: JobContext) -> None:
             return
         _last_offline_announce = now
         try:
-            await session.generate_reply(
-                instructions=(
-                    "Briefly tell the technician you've lost the connection to the "
-                    "dispatch server and are now running on locally cached job "
-                    "data -- one short sentence, e.g. 'Heads up, I've lost the "
-                    "link to dispatch -- job history and inventory might be a few "
-                    "minutes stale until I reconnect.' Voice itself is unaffected, "
-                    "so don't imply you've gone fully offline. Then continue normally."
-                )
+            handle = session.say(
+                "Heads up, I've lost the link to dispatch -- running on locally cached data.",
+                add_to_chat_ctx=False,
             )
+            await handle.wait_if_not_interrupted()
         except Exception:
             logger.exception("failed to announce offline transition (call was unaffected)")
 
@@ -308,14 +308,11 @@ async def entrypoint(ctx: JobContext) -> None:
             return
         _last_online_announce = now
         try:
-            await session.generate_reply(
-                instructions=(
-                    "Briefly tell the technician you're reconnected to the "
-                    "dispatch server -- one short sentence, e.g. 'Good news, I'm "
-                    "reconnected to dispatch -- job history and inventory are "
-                    "live again.' Voice itself is unaffected. Then continue normally."
-                )
+            handle = session.say(
+                "Good news, I'm reconnected to dispatch -- data is live again.",
+                add_to_chat_ctx=False,
             )
+            await handle.wait_if_not_interrupted()
         except Exception:
             logger.exception("failed to announce reconnect (call was unaffected)")
 

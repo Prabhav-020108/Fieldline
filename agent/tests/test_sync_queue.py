@@ -120,13 +120,16 @@ async def test_row_dropped_after_max_attempts():
     )
     assert _row_count() == 1
 
-    # Simulate 9 failed attempts already recorded
+    # Simulate MAX_ATTEMPTS - 1 failed attempts already recorded
     conn = sync_queue._get_connection()
-    conn.execute("UPDATE sync_queue SET attempts = 9, next_attempt_at = ?", (time.time() - 1,))
+    conn.execute(
+        "UPDATE sync_queue SET attempts = ?, next_attempt_at = ?",
+        (sync_queue.MAX_ATTEMPTS - 1, time.time() - 1),
+    )
     conn.commit()
     conn.close()
 
-    # The 10th attempt reaches MAX_ATTEMPTS (10) and drops the row
+    # The next attempt reaches MAX_ATTEMPTS and drops the row
     await sync_queue.process_due_ops()
     assert _row_count() == 0
 

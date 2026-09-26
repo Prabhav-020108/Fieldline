@@ -31,6 +31,7 @@ Usage:
 
 import asyncio
 import logging
+import os
 import socket
 import time
 from collections.abc import Awaitable, Callable
@@ -125,7 +126,23 @@ class ConnectivityMonitor:
 
 def _probe_internet() -> bool:
     """Blocking TCP-connect probe. Runs in a background thread via
-    run_in_executor so it never blocks the agent's event loop."""
+    run_in_executor so it never blocks the agent's event loop.
+
+    Checks the dispatch backend server first (if configured) so that
+    a backend drop is reliably treated as offline without flapping.
+    """
+    backend_url = os.environ.get("FIELDLINE_BACKEND_URL")
+    if backend_url:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(backend_url)
+            host = p.hostname or "127.0.0.1"
+            port = p.port or (443 if p.scheme == "https" else 80)
+            with socket.create_connection((host, port), timeout=_PROBE_TIMEOUT_SECONDS):
+                return True
+        except OSError:
+            return False
+
     for host, port in _PROBE_HOSTS:
         try:
             with socket.create_connection((host, port), timeout=_PROBE_TIMEOUT_SECONDS):

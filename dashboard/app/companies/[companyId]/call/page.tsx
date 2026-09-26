@@ -1,8 +1,8 @@
 "use client";
 
 import "@livekit/components-styles";
-import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useState, useSyncExternalStore } from "react";
 import { Track } from "livekit-client";
 import {
   BarVisualizer,
@@ -12,7 +12,7 @@ import {
   TrackToggle,
   useVoiceAssistant,
 } from "@livekit/components-react";
-import { PhoneOff, Radio } from "lucide-react";
+import { Lock, PhoneOff, Radio } from "lucide-react";
 
 import { getCallRoleToken, isLoggedIn } from "@/lib/api";
 import { Badge, Button, Spinner } from "@/components/ui";
@@ -30,34 +30,45 @@ export default function CallPage() {
 }
 
 function CallPageInner({ companyId }: { companyId: string }) {
+  const router = useRouter();
   const roomName = `fieldline-${companyId}`;
   const [details, setDetails] = useState<ConnectionDetails | null>(null);
   const [activeRole, setActiveRole] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const authChecked = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const loggedIn = authChecked && isLoggedIn();
+
   const startCall = async () => {
+    if (!isLoggedIn()) {
+      setError("Authentication required: Please sign in before connecting to the voice agent.");
+      return;
+    }
     setConnecting(true);
     setError(null);
     try {
-      const identity = `dispatcher-${Math.random().toString(36).slice(2, 8)}`;
       let roleToken: string | null = null;
       let role: string | null = null;
 
-      if (isLoggedIn()) {
-        try {
-          const result = await getCallRoleToken(companyId);
-          roleToken = result.token;
-          role = result.role;
-        } catch {
-          // Session likely expired -- the call still starts, just without
-          // elevated permissions. The agent treats a missing token as
-          // least-privilege ("technician").
-        }
+      try {
+        const result = await getCallRoleToken(companyId);
+        roleToken = result.token;
+        role = result.role;
+      } catch (err: unknown) {
+        throw new Error(
+          err instanceof Error
+            ? err.message
+            : "Could not obtain an authorized call role token for this company. Please ensure you are signed in with an authorized account."
+        );
       }
 
-      const params = new URLSearchParams({ room: roomName, identity });
-      if (roleToken) params.set("roleToken", roleToken);
+      const identity = `${role}-${Math.random().toString(36).slice(2, 8)}`;
+      const params = new URLSearchParams({ room: roomName, identity, roleToken });
 
       const res = await fetch(`/api/livekit-token?${params.toString()}`);
       const data = await res.json();
@@ -86,7 +97,26 @@ function CallPageInner({ companyId }: { companyId: string }) {
         </p>
       </div>
 
-      {!details ? (
+      {!authChecked ? (
+        <div className="flex items-center justify-center py-20">
+          <Spinner size={20} />
+        </div>
+      ) : !loggedIn ? (
+        <div className="flex flex-col items-center justify-center gap-4 py-16 px-6 bg-[var(--surface)] border border-[var(--line)] rounded-[var(--radius-lg)] text-center max-w-lg mx-auto">
+          <div className="w-12 h-12 rounded-full bg-[var(--surface-sunken)] flex items-center justify-center text-[var(--ink-muted)]">
+            <Lock size={22} />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-[var(--ink)]">Sign in required</h3>
+            <p className="text-sm text-[var(--ink-muted)] mt-1.5">
+              Only authenticated team members (dispatcher, supervisor, or technician) can connect to the voice agent. Please sign in to continue.
+            </p>
+          </div>
+          <Button onClick={() => router.push("/login")}>
+            Sign in
+          </Button>
+        </div>
+      ) : !details ? (
         <div className="flex flex-col items-center justify-center gap-4 py-20 bg-[var(--surface)] border border-[var(--line)] rounded-[var(--radius-lg)]">
           <Button onClick={startCall} disabled={connecting}>
             {connecting ? <Spinner size={14} /> : <Radio size={16} />}
@@ -98,7 +128,6 @@ function CallPageInner({ companyId }: { companyId: string }) {
           <p className="text-xs text-[var(--ink-faint)] max-w-sm text-center">
             Needs the agent running (<code className="font-mono">uv run python src/agent.py dev</code>)
             and LiveKit credentials in <code className="font-mono">dashboard/.env.local</code>.
-            {!isLoggedIn() ? " Sign in from the sidebar first for supervisor/dispatcher permissions on this call." : null}
           </p>
         </div>
       ) : (
