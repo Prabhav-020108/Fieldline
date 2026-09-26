@@ -2,26 +2,20 @@
   <img src="./.github/assets/livekit-mark.png" alt="LiveKit logo" width="100" height="100">
 </a>
 
-# LiveKit Agents Starter - Python
+# FieldLine Voice Agent
 
-A complete starter project for building voice AI apps with [LiveKit Agents for Python](https://github.com/livekit/agents) and [LiveKit Cloud](https://cloud.livekit.io/).
+The autonomous voice dispatch assistant for FieldLine, built with [LiveKit Agents for Python](https://github.com/livekit/agents) and [LiveKit Cloud](https://cloud.livekit.io/).
 
-The starter project includes:
+### Key Features:
 
-- A simple voice AI assistant, ready for extension and customization
-- A voice AI pipeline built on [LiveKit Inference](https://docs.livekit.io/agents/models/inference), providing zero-configuration access to [models](https://docs.livekit.io/agents/models) from top labs
-  - Uses the fast, open-weight Gemma 4 31B model, [hosted by LiveKit](https://docs.livekit.io/agents/models/llm/livekit/) and tuned for optimal performance in voice AI, as the default LLM
-  - Uses Fish Audio S2.1 Pro for TTS, which renders the inline delivery markup that expressive mode relies on
-  - Supports more than 50 models from OpenAI, Cartesia, Deepgram, and other providers
-  - Access to a wide range of other models, including [Realtime models](https://docs.livekit.io/agents/models/realtime), through extensive plugin ecosystem
-- Expressive mode, enabled by default: the framework injects the TTS provider's markup guide into the LLM prompt, so the model emits inline delivery tags (emotion, pacing, non-verbal sounds) that the TTS renders and the transcript never shows
-- Eval suite based on the LiveKit Agents [testing & evaluation framework](https://docs.livekit.io/agents/start/testing/)
-- [LiveKit Turn Detector](https://docs.livekit.io/agents/logic/turns/turn-detector/), an end-of-turn model that listens to the user's audio directly, combining semantic understanding with acoustic cues for state-of-the-art accuracy across 14 languages
-- [Background voice cancellation](https://docs.livekit.io/transport/media/noise-cancellation/)
-- Deep session insights from LiveKit [Agent Observability](https://docs.livekit.io/deploy/observability/)
-- A Dockerfile ready for [production deployment to LiveKit Cloud](https://docs.livekit.io/deploy/agents/)
-
-This starter app is compatible with any [custom web/mobile frontend](https://docs.livekit.io/frontends/) or [telephony](https://docs.livekit.io/telephony/).
+- **Multi-Tenant Voice Pipeline**:
+  - **Online**: Groq STT (`whisper-large-v3-turbo`), Groq LLM (`openai/gpt-oss-120b`), LiveKit Inference TTS (`cartesia/sonic-3` with `fishaudio/s2.1-pro` fallback)
+  - **Offline Fallback**: CPU `faster-whisper` (`small`), Ollama (`llama3.2:3b`), and Piper TTS (`local_tts_server.py`)
+- **5 Hands-Free Domain Tools**: `fault_history`, `safety_procedure` (with citation and confidence floor), `inventory_lookup`, `dispatch_status`, and `log_job_note`
+- **Offline-First Data Layer**: Durable SQLite-backed `sync_queue.py` and local in-process Moss `SessionIndex`
+- **Zero-Network RBAC**: Local HMAC token verification (`role_cache.py`) for technician, supervisor, and dispatcher roles
+- **Observability**: OpenTelemetry tracing of all stages to Arize Phoenix
+- **Comprehensive Test Suite**: 88 automated unit tests covering all tools, tenant routing, role enforcement, and offline sync
 
 ## Using coding agents
 
@@ -73,9 +67,8 @@ The CLI clones the template and configures your environment. Then follow the res
 <summary>Alternative: Manual setup without the CLI</summary>
 
 Clone the repository and install dependencies to a virtual environment:
-
 ```console
-cd agent-starter-python
+cd agent
 uv sync
 ```
 
@@ -132,23 +125,22 @@ For advanced customization, see the [complete frontend guide](https://docs.livek
 
 ## Tests and evals
 
-Simulations run full multi-turn conversations between a simulated user and your agent on LiveKit Cloud, then judge each transcript. The scenarios live in [`scenarios.yaml`](scenarios.yaml). Run them locally with the [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/):
+The agent includes a full suite of **88 unit tests** covering tool execution, confidence floors, multi-tenant company routing, offline sync queue persistence, and local hybrid pipeline fallbacks:
 
 ```console
-lk agent simulate --scenarios scenarios.yaml
+uv run pytest -v
 ```
 
-The `Simulations` workflow in `.github/workflows/simulations.yml` runs the same file on every merge to `main` and on demand from the Actions tab. It runs there rather than on every pull request push because each run spends real inference. See the [simulations guide](https://docs.livekit.io/agents/start/testing/simulations/) for how to write scenarios and read results.
+All 88 tests run without external dependencies (Moss, LiveKit Cloud, and backend are mocked with realistic test doubles).
 
-For turn-level checks that don't need a live session, the LiveKit Agents [testing & evaluation framework](https://docs.livekit.io/agents/start/testing/) runs your agent in-process under `pytest`. A commented-out example lives in [`tests/test_agent.py`](tests/test_agent.py).
+### Offline RAG Evaluation
 
-## Using this template repo for your own project
+Offline answer faithfulness and context precision are evaluated using Ragas against a golden reference set:
 
-Once you've started your own project based on this repo, you should:
-
-1. **Check in your `uv.lock`**: This file is currently untracked for the template, but you should commit it to your repository for reproducible builds and proper configuration management. (The same applies to `livekit.toml`, if you run your agents in LiveKit Cloud)
-
-2. **Add your own repository secrets**: You must [add secrets](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/using-secrets-in-github-actions) for `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` so that the simulations can run in CI.
+```console
+uv sync --group eval
+uv run --group eval python eval/run_ragas_eval.py
+```
 
 ## Deploying to production
 

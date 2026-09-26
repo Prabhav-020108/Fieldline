@@ -52,6 +52,6 @@ same rigor as the repo.
 
 | ID | Requirement | Acceptance criteria | Component | Verified by |
 |---|---|---|---|---|
-| NFR-18 | Backend API test coverage | Every endpoint group (auth, companies, jobs, inventory, safety procedures, audit log, export) has automated tests for success, validation errors, role denials and cross-company isolation; the suite runs on a throwaway SQLite database, never real data | `backend/tests/` (91 tests) | Phase 9a |
-| NFR-19 | Agent behavior tests incl. offline path | All five tools, company routing, offline write queueing and local search are tested with Moss and the backend faked; each read tool is tested identically online and offline; the `log_job_note` role gate is tested with the network off | `agent/tests/` | Phase 9b |
+| NFR-18 | Backend API test coverage | Every endpoint group (auth, companies, jobs, inventory, safety procedures, audit log, export) has automated tests for success, validation errors, role denials and cross-company isolation; the suite runs on a throwaway SQLite database, never real data | `backend/tests/` (97 tests) | Phase 9a |
+| NFR-19 | Agent behavior tests incl. offline path | All five tools, company routing, offline write queueing and local search are tested with Moss and the backend faked; each read tool is tested identically online and offline; the `log_job_note` role gate is tested with the network off | `agent/tests/` (88 tests) | Phase 9b |
 | NFR-20 | Continuous integration | Lint and tests run automatically on every push and pull request to `main` for the agent, backend (including `alembic upgrade head` on Postgres 16) and dashboard (lint and build); a red check blocks merging | `.github/workflows/` | Phase 9c |

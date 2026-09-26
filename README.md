@@ -66,47 +66,52 @@ the right company from its LiveKit room name.
 ## Repo structure
 
 fieldline/
-├── agent/ # LiveKit Agents (Python) voice agent
-│ ├── src/
-│ │ ├── agent.py # entrypoint, tool registration, greeting
-│ │ ├── company_context.py # per-call company routing (ContextVar)
-│ │ ├── moss_client.py # per-company Moss router + offline session
-│ │ ├── connectivity.py # online/offline detection
-│ │ ├── local_pipeline.py # faster-whisper + Ollama + Piper wiring
-│ │ ├── audit_log.py # Phase 6: audit logging, offline-buffered
-│ │ ├── local_tts_server.py # standalone Piper TTS server (run separately)
-│ │ └── tools/
-│ │ ├── fault_history.py
-│ │ ├── safety_procedure.py
-│ │ ├── inventory_lookup.py
-│ │ ├── dispatch_status.py
-│ │ └── log_job_note.py
-│ ├── tests/
-│ │ ├── test_agent.py
-│ │ ├── test_audit_log.py # Phase 6
-│ │ └── test_safety_procedure_confidence.py # Phase 6
-│ ├── models/ # Piper voice model files
-│ ├── .env.example
-│ └── pyproject.toml
-├── backend/ # FastAPI dispatch backend
-│ ├── main.py # all REST endpoints, incl. audit log
-│ ├── models.py # SQLAlchemy tables
-│ ├── seed_db.py # seeds two demo companies
-│ ├── moss_sync.py # DB rows -> Moss cloud index, per company
-│ ├── document_builder.py # row -> Moss document shape (shared)
-│ └── .env.example
-├── dashboard/ # Next.js multi-tenant dispatch console
-│ └── app/
-│ ├── page.tsx # company list / create company
-│ ├── api/livekit-token/ # mints LiveKit tokens w/ explicit dispatch
-│ └── companies/[companyId]/
-│ ├── page.tsx # Overview
-│ ├── jobs/ # Job CRUD + reroute
-│ ├── safety/ # Safety procedure CRUD
-│ ├── audit/ # Phase 6: audit log viewer
-│ ├── inventory/ # Inventory CRUD
-│ └── call/ # Talk-to-agent voice UI
-├── data/seed/ # Phase 2 fallback seed JSON (site-demo only)
+├── agent/                         # LiveKit Agents (Python) voice agent
+│   ├── src/
+│   │   ├── agent.py               # entrypoint, tool registration, greeting
+│   │   ├── company_context.py     # per-call company routing (ContextVar)
+│   │   ├── moss_client.py         # per-company Moss router + offline session
+│   │   ├── connectivity.py        # online/offline detection + backend probing
+│   │   ├── sync_queue.py          # Phase 8d: durable SQLite offline sync queue
+│   │   ├── role_cache.py          # Phase 8c: local HMAC role token verification
+│   │   ├── tracing.py             # Phase 7: OpenTelemetry + Phoenix tracing
+│   │   ├── settings.py            # Phase 8b: strict Pydantic settings
+│   │   ├── local_pipeline.py      # faster-whisper + Ollama + Piper wiring
+│   │   ├── audit_log.py           # Phase 6: audit logging, offline-buffered
+│   │   ├── local_tts_server.py    # standalone Piper TTS server
+│   │   └── tools/
+│   │       ├── fault_history.py
+│   │       ├── safety_procedure.py
+│   │       ├── inventory_lookup.py
+│   │       ├── dispatch_status.py
+│   │       └── log_job_note.py
+│   ├── tests/                     # 88 automated unit tests
+│   ├── models/                    # Piper voice model files
+│   ├── .env.example
+│   └── pyproject.toml
+├── backend/                       # FastAPI dispatch backend
+│   ├── main.py                    # REST endpoints & error handlers
+│   ├── auth.py                    # JWT authentication & RBAC dependency
+│   ├── models.py                  # SQLAlchemy tables
+│   ├── settings.py                # Environment configuration
+│   ├── seed_db.py                 # Seeds two demo companies
+│   ├── moss_sync.py               # DB rows -> Moss cloud index, per company
+│   ├── document_builder.py        # Row -> Moss document shape (shared)
+│   ├── migrations/                # Alembic migration scripts
+│   ├── tests/                     # 97 automated unit tests
+│   └── .env.example
+├── dashboard/                     # Next.js multi-tenant dispatch console
+│   └── app/
+│       ├── page.tsx               # Company list / create company
+│       ├── api/livekit-token/     # Mints LiveKit tokens with role token verification
+│       └── companies/[companyId]/
+│           ├── page.tsx           # Overview
+│           ├── jobs/              # Job CRUD + reroute
+│           ├── safety/            # Safety procedure CRUD
+│           ├── audit/             # Phase 6: audit log viewer
+│           ├── inventory/         # Inventory CRUD
+│           └── call/              # Talk-to-agent voice UI (authenticated gate)
+├── data/seed/                     # Phase 2 fallback seed JSON (site-demo only)
 └── README.md
 
 
@@ -267,7 +272,7 @@ FieldLine supports three distinct operational tiers (see `docs/CONNECTIVITY_MODE
 
 | Tier | Status | What works |
 |---|---|---|
-| **Tier 1: Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss all online | Cloud STT/LLM/TTS (Groq, GPT-OSS, Fish Audio), live sync to Moss and Postgres |
+| **Tier 1: Full connectivity** | Phone ↔ LiveKit Cloud ↔ agent ↔ backend/Moss all online | Cloud STT/LLM/TTS (Groq Whisper, GPT-OSS, Cartesia Sonic-3 with Fish Audio fallback), live sync to Moss and Postgres |
 | **Tier 2: Degraded connectivity** | WebRTC voice connection stays up; backend/Moss drops | Retrieval continues via in-memory local Moss session; notes and audit entries buffer to SQLite via `sync_queue.py` and replay on reconnect; single debounced voice advisory |
 | **Tier 3: Edge deployment (Zero Internet)** | Phone ↔ Local Wi-Fi / Hotspot ↔ Self-hosted LiveKit Server + Local Agent Stack + SQLite | **100% autonomous on-site operation**: CPU faster-whisper STT, Ollama LLM (`llama3.2:3b`), Piper TTS, local session index, SQLite backend. Zero internet needed. Drains upstream when WAN returns. |
 

@@ -6,7 +6,7 @@ FieldLine's voice assistant is engineered specifically for real-world field oper
 
 | Tier | What's actually happening | What still works |
 |---|---|---|
-| **Tier 1: Full Connectivity (Cloud)** | Phone ↔ LiveKit Cloud ↔ Agent ↔ Backend/Moss Cloud all reachable | **Everything**: High-speed cloud STT/LLM/TTS models (Groq Whisper, GPT-OSS, Fish Audio), live bi-directional sync, real-time dashboard updates across all users. |
+| **Tier 1: Full Connectivity (Cloud)** | Phone ↔ LiveKit Cloud ↔ Agent ↔ Backend/Moss Cloud all reachable | **Everything**: High-speed cloud STT/LLM/TTS models (Groq Whisper, GPT-OSS, Cartesia Sonic-3 with Fish Audio fallback), live bi-directional sync, real-time dashboard updates across all users. |
 | **Tier 2: Degraded Connectivity (Hybrid)** | Phone ↔ LiveKit Cloud stays up; Agent ↔ Backend/Moss Cloud drops | **Voice remains 100% live**: Retrieval answers immediately from the in-memory Moss session hydrated at shift start; job notes and audit entries buffer durably via `sync_queue.py` (SQLite with exponential backoff + jitter) and drain automatically upon reconnect. Zero spoken interruptions, single debounced advisory announcement. |
 | **Tier 3: Edge Deployment (Zero Internet)** | Phone ↔ Local Wi-Fi / Hotspot ↔ On-Site Edge Appliance (Self-Hosted LiveKit Server + Local Agent Stack + SQLite Backend) | **Complete local autonomy with zero external WAN**: Speech-to-text via CPU `faster-whisper`, local LLM reasoning via `Ollama` (`llama3.2:3b`), local TTS via `Piper`, local session search, and SQLite storage. WebRTC connects peer-to-peer over local LAN/Hotspot. When internet returns, the sync queue flushes all buffered records upstream. |
 
