@@ -66,6 +66,7 @@ export interface AuditLogEntry {
   confidence_score: number | null;
   below_confidence_floor: boolean;
   created_at: string; // ISO 8601 UTC
+  received_at: string | null; // ISO 8601 UTC -- set server-side on receipt
 }
 
 export const INDUSTRIES: { value: Industry; label: string }[] = [

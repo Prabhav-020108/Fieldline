@@ -14,7 +14,7 @@ re-run seed_db.py to "fix" a schema mismatch again; run
 `alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
 """
 
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from settings import settings
@@ -84,6 +84,9 @@ class AuditLogEntry(Base):
     confidence_score = Column(Float, nullable=True)
     below_confidence_floor = Column(Boolean, default=False)
     created_at = Column(String, index=True)
+    # Phase 11: set server-side on receipt so the dashboard can detect entries
+    # synced from offline (where created_at << received_at).
+    received_at = Column(String, nullable=True)
 
 
 class User(Base):
@@ -124,3 +127,14 @@ def init_db():
     with it. Kept only as a convenience for a throwaway local SQLite
     database outside the normal Postgres + Alembic flow."""
     Base.metadata.create_all(engine)
+    # Phase 11: gracefully add received_at to existing audit_log_entries
+    # tables that were created before this column existed.
+    if _is_sqlite:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE audit_log_entries ADD COLUMN received_at TEXT"
+                ))
+                conn.commit()
+        except Exception:
+            pass  # column already exists -- exactly what we want

@@ -92,8 +92,13 @@ function CompanyLayoutInner({
 
   return (
     <div>
+      {/* Phase 11: Full-width connectivity banner -- visible from across the room */}
+      <div className="px-8 pt-4 max-w-5xl mx-auto">
+        <ConnectivityIndicator variant="banner" />
+      </div>
+
       <div className="border-b border-[var(--line)] bg-[var(--surface)]">
-        <div className="max-w-5xl mx-auto px-8 pt-8">
+        <div className="max-w-5xl mx-auto px-8 pt-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               {company ? (
@@ -115,7 +120,7 @@ function CompanyLayoutInner({
               )}
             </div>
             <div className="flex items-center gap-3">
-              <ConnectivityIndicator />
+              <ConnectivityIndicator compact />
               {syncResult ? <InlineNote tone={syncResult.tone}>{syncResult.message}</InlineNote> : null}
               <Button
                 variant="secondary"

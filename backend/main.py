@@ -44,6 +44,7 @@ Then open http://localhost:8000/docs for FastAPI's interactive API explorer.
 """
 
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -271,6 +272,7 @@ class AuditLogOut(BaseModel):
     confidence_score: Optional[float] = None
     below_confidence_floor: bool
     created_at: str
+    received_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +306,15 @@ def _background_sync(company_id: str, background_tasks: BackgroundTasks) -> None
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    """Health check endpoint, enhanced for the dashboard's connectivity
+    indicator. Returns server_time for latency detection and edge_mode
+    flag so the UI can distinguish edge vs cloud."""
+    return {
+        "status": "ok",
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "edge_mode": os.environ.get("FIELDLINE_EDGE_MODE") == "1"
+            or settings.database_url.startswith("sqlite"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +769,7 @@ def delete_safety_procedure(
 @app.post("/companies/{company_id}/audit-log", response_model=AuditLogOut, status_code=201)
 def create_audit_log_entry(company_id: str, payload: AuditLogIn, db: Session = Depends(get_db)):
     _get_company_or_404(db, company_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
     entry = AuditLogEntry(
         id=f"audit-{_new_id()}",
         company_id=company_id,
@@ -768,7 +779,8 @@ def create_audit_log_entry(company_id: str, payload: AuditLogIn, db: Session = D
         source_citation=payload.source_citation,
         confidence_score=payload.confidence_score,
         below_confidence_floor=payload.below_confidence_floor,
-        created_at=payload.created_at or datetime.now(timezone.utc).isoformat(),
+        created_at=payload.created_at or now_iso,
+        received_at=now_iso,
     )
     db.add(entry)
     db.commit()

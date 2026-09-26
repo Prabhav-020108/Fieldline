@@ -246,7 +246,16 @@ export const listAuditLog = (companyId: string, limit = 200) =>
 
 export type ConnectivityStatus = "online" | "edge" | "offline";
 
-export async function checkBackendHealth(): Promise<{ status: ConnectivityStatus; url: string }> {
+export interface HealthResult {
+  status: ConnectivityStatus;
+  url: string;
+  latencyMs: number;
+  serverTime: string | null;
+  edgeMode: boolean;
+}
+
+export async function checkBackendHealth(): Promise<HealthResult> {
+  const start = performance.now();
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
@@ -255,15 +264,21 @@ export async function checkBackendHealth(): Promise<{ status: ConnectivityStatus
       signal: controller.signal,
     });
     clearTimeout(timer);
+    const latencyMs = Math.round(performance.now() - start);
     if (res.ok) {
-      const isLocal =
-        API_BASE.includes("localhost") ||
-        API_BASE.includes("127.0.0.1") ||
-        API_BASE.includes(":8000");
-      return { status: isLocal ? "edge" : "online", url: API_BASE };
+      const data = await res.json();
+      const edgeMode = data.edge_mode === true;
+      return {
+        status: edgeMode ? "edge" : "online",
+        url: API_BASE,
+        latencyMs,
+        serverTime: data.server_time ?? null,
+        edgeMode,
+      };
     }
-    return { status: "offline", url: API_BASE };
+    return { status: "offline", url: API_BASE, latencyMs, serverTime: null, edgeMode: false };
   } catch {
-    return { status: "offline", url: API_BASE };
+    const latencyMs = Math.round(performance.now() - start);
+    return { status: "offline", url: API_BASE, latencyMs, serverTime: null, edgeMode: false };
   }
-}
+}
