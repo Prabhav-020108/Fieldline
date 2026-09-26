@@ -1,0 +1,45 @@
+services:
+  # FieldLine FastAPI Backend
+  - type: web
+    name: fieldline-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: "uv sync --frozen --no-dev"
+    startCommand: "uv run uvicorn main:app --host 0.0.0.0 --port $PORT"
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: DATABASE_URL
+        sync: false
+      - key: FIELDLINE_JWT_SECRET
+        generateValue: true
+      - key: MOSS_PROJECT_ID
+        sync: false
+      - key: MOSS_PROJECT_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        value: "http://localhost:3000"
+      - key: ENVIRONMENT
+        value: "production"
+
+  # FieldLine Next.js Dispatch Dashboard
+  - type: web
+    name: fieldline-dashboard
+    runtime: node
+    rootDir: dashboard
+    buildCommand: "npm ci && npm run build"
+    startCommand: "npm run start -- -p $PORT"
+    plan: free
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_LIVEKIT_URL
+        sync: false

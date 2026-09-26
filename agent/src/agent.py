@@ -233,8 +233,37 @@ async def entrypoint(ctx: JobContext) -> None:
     if os.environ.get("FIELDLINE_CLOUD_DEPLOY") != "1":
         asyncio.create_task(_warm_up_llm())
 
-    if os.environ.get("FIELDLINE_EDGE_MODE") == "1":
-        logger.info("edge mode enabled: initializing local STT, TTS, and LLM pipeline only")
+    is_edge_mode = os.environ.get("FIELDLINE_EDGE_MODE") == "1"
+    configured_livekit_url = os.environ.get("LIVEKIT_URL", "wss://fieldline-y34tzh74.livekit.cloud")
+
+    if is_edge_mode:
+        logger.info("=" * 65)
+        logger.info("  FIELDLINE AGENT: EDGE MODE ACTIVE (100% Offline / Local)")
+        logger.info("  LiveKit URL: %s", configured_livekit_url)
+        logger.info("  STT: faster-whisper (local CPU)")
+        logger.info("  LLM: Ollama %s (%s)", os.environ.get("OLLAMA_MODEL", "llama3.2:3b"), os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"))
+        logger.info("  TTS: Piper Neural TTS (%s)", os.environ.get("PIPER_TTS_BASE_URL", "http://localhost:8880/v1"))
+        logger.info("=" * 65)
+
+        # Quick pre-flight check for local Piper TTS server
+        try:
+            import urllib.request
+            urllib.request.urlopen("http://localhost:8880/health", timeout=1.0)
+        except Exception:
+            logger.warning(
+                "\n"
+                "********************************************************************************\n"
+                "WARNING: Local Piper TTS server at http://localhost:8880 is NOT responding!\n"
+                "  -> If you are presenting the ZERO-INTERNET EDGE DEMO (Phone/Offline):\n"
+                "     Start Piper in another terminal: uv run python src/local_tts_server.py\n\n"
+                "  -> If you intended to run the PRIMARY CLOUD DEMO (Laptop/Pitch):\n"
+                "     Your PowerShell session still has FIELDLINE_EDGE_MODE=1 set from earlier!\n"
+                "     Run: Remove-Item env:FIELDLINE_EDGE_MODE, env:LIVEKIT_URL\n"
+                "     Then restart: uv run python src/agent.py dev\n"
+                "     (Or simply run: .\\start-cloud.ps1 -Component agent)\n"
+                "********************************************************************************\n"
+            )
+
         session = AgentSession(
             stt=build_local_stt(),
             tts=build_local_tts(),
@@ -246,6 +275,27 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         active_llm = build_local_llm()
     else:
+        logger.info("=" * 65)
+        logger.info("  FIELDLINE AGENT: PRIMARY CLOUD DEMO MODE ACTIVE")
+        logger.info("  LiveKit Cloud: %s", configured_livekit_url)
+        logger.info("  STT: Groq Whisper Large v3 Turbo")
+        logger.info("  LLM: Groq Llama 3.3 120B (openai/gpt-oss-120b)")
+        logger.info("  TTS: Cartesia Sonic-3 (LiveKit Cloud Inference)")
+        logger.info("=" * 65)
+
+        if "localhost" in configured_livekit_url or "127.0.0.1" in configured_livekit_url:
+            logger.warning(
+                "\n"
+                "********************************************************************************\n"
+                "NOTICE: LIVEKIT_URL is currently set to '%s' (local server),\n"
+                "        but you are running in Cloud Mode (expecting LiveKit Cloud)!\n"
+                "  If you intended to connect to LiveKit Cloud for your primary demo, run:\n"
+                "    Remove-Item env:LIVEKIT_URL\n"
+                "  in your PowerShell terminal before running the agent.\n"
+                "********************************************************************************\n",
+                configured_livekit_url,
+            )
+
         cloud_stt = groq.STT(model="whisper-large-v3-turbo", language="en")
         cloud_llm = groq.LLM(model="openai/gpt-oss-120b", reasoning_effort="low")
         cloud_tts = inference.TTS(

@@ -1,6 +1,21 @@
 import type { AuditLogEntry, Company, InventoryItem, Job, SafetyProcedure } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export function getApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured && configured.startsWith("https://")) {
+    return configured;
+  }
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1"
+  ) {
+    return "/api/backend";
+  }
+  return configured || "http://localhost:8000";
+}
+
 const TOKEN_KEY = "fieldline_token";
 
 function getToken(): string | null {
@@ -13,29 +28,40 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
-  });
+  const apiBase = getApiBase();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (body && typeof body.detail === "string") {
-        detail = body.detail;
+  try {
+    const res = await fetch(`${apiBase}${path}`, {
+      cache: "no-store",
+      signal: controller.signal,
+      ...options,
+      headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        if (body && typeof body.detail === "string") {
+          detail = body.detail;
+        }
+      } catch {
+        // response body wasn't JSON -- keep the default statusText
       }
-    } catch {
-      // response body wasn't JSON -- keep the default statusText
+      throw new Error(detail || `Request to ${path} failed (${res.status})`);
     }
-    throw new Error(detail || `Request to ${path} failed (${res.status})`);
-  }
 
-  if (res.status === 204) {
-    return undefined as T;
+    if (res.status === 204) {
+      return undefined as T;
+    }
+    return (await res.json()) as T;
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    throw err;
   }
-  return (await res.json()) as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,25 +76,36 @@ export async function login(
   body.set("username", username);
   body.set("password", password);
 
-  const res = await fetch(`${API_BASE}/auth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-    cache: "no-store",
-  });
+  const apiBase = getApiBase();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const errBody = await res.json();
-      if (errBody && typeof errBody.detail === "string") detail = errBody.detail;
-    } catch {
-      // ignore
+  try {
+    const res = await fetch(`${apiBase}/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const errBody = await res.json();
+        if (errBody && typeof errBody.detail === "string") detail = errBody.detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail || "Login failed.");
     }
-    throw new Error(detail || "Login failed.");
-  }
 
-  return await res.json();
+    return await res.json();
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 export function logout(): void {
@@ -256,10 +293,11 @@ export interface HealthResult {
 
 export async function checkBackendHealth(): Promise<HealthResult> {
   const start = performance.now();
+  const apiBase = getApiBase();
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(`${API_BASE}/health`, {
+    const res = await fetch(`${apiBase}/health`, {
       cache: "no-store",
       signal: controller.signal,
     });
@@ -270,15 +308,15 @@ export async function checkBackendHealth(): Promise<HealthResult> {
       const edgeMode = data.edge_mode === true;
       return {
         status: edgeMode ? "edge" : "online",
-        url: API_BASE,
+        url: apiBase,
         latencyMs,
         serverTime: data.server_time ?? null,
         edgeMode,
       };
     }
-    return { status: "offline", url: API_BASE, latencyMs, serverTime: null, edgeMode: false };
+    return { status: "offline", url: apiBase, latencyMs, serverTime: null, edgeMode: false };
   } catch {
     const latencyMs = Math.round(performance.now() - start);
-    return { status: "offline", url: API_BASE, latencyMs, serverTime: null, edgeMode: false };
+    return { status: "offline", url: apiBase, latencyMs, serverTime: null, edgeMode: false };
   }
 }

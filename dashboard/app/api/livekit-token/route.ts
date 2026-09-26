@@ -53,5 +53,23 @@ export async function GET(req: NextRequest) {
 
   const token = await at.toJwt();
 
-  return NextResponse.json({ token, url: wsUrl, room, identity });
+  let clientWsUrl = wsUrl;
+  try {
+    const hostHeader = req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
+    const clientHostname = hostHeader ? hostHeader.split(":")[0] : req.nextUrl.hostname;
+    if (
+      clientHostname &&
+      clientHostname !== "localhost" &&
+      clientHostname !== "127.0.0.1" &&
+      (clientWsUrl.includes("localhost") || clientWsUrl.includes("127.0.0.1"))
+    ) {
+      clientWsUrl = clientWsUrl
+        .replace("localhost", clientHostname)
+        .replace("127.0.0.1", clientHostname);
+    }
+  } catch {
+    // Keep wsUrl if header inspection fails
+  }
+
+  return NextResponse.json({ token, url: clientWsUrl, room, identity });
 }

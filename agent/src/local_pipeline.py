@@ -180,9 +180,11 @@ def build_local_llm() -> llm.LLM:
 
 def build_local_tts() -> tts.TTS:
     """Piper, through local_tts_server.py's OpenAI-compatible
-    /v1/audio/speech endpoint (run that file as its own process first)."""
+    /v1/audio/speech endpoint (run that file as its own process first).
+    Note: model='tts-1' instructs livekit.plugins.openai to use
+    AudioChunkedStream (binary audio) rather than SSEChunkedStream."""
     return openai.TTS(
-        model="piper",
+        model="tts-1",
         voice="default",
         api_key="not-needed",
         base_url=PIPER_TTS_BASE_URL,
