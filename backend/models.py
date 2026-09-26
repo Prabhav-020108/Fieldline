@@ -14,7 +14,17 @@ re-run seed_db.py to "fix" a schema mismatch again; run
 `alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
 """
 
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String, Text, create_engine, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from settings import settings
@@ -128,13 +138,17 @@ def init_db():
     database outside the normal Postgres + Alembic flow."""
     Base.metadata.create_all(engine)
     # Phase 11: gracefully add received_at to existing audit_log_entries
-    # tables that were created before this column existed.
-    if _is_sqlite:
-        try:
-            with engine.connect() as conn:
+    # tables that were created before this column existed (both SQLite and Postgres/Render).
+    try:
+        with engine.connect() as conn:
+            if _is_sqlite:
                 conn.execute(text(
                     "ALTER TABLE audit_log_entries ADD COLUMN received_at TEXT"
                 ))
-                conn.commit()
-        except Exception:
-            pass  # column already exists -- exactly what we want
+            else:
+                conn.execute(text(
+                    "ALTER TABLE audit_log_entries ADD COLUMN IF NOT EXISTS received_at TEXT"
+                ))
+            conn.commit()
+    except Exception:
+        pass  # column already exists -- exactly what we want

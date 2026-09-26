@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Radio, Wifi, WifiOff, Zap } from "lucide-react";
 import { checkBackendHealth, type ConnectivityStatus, type HealthResult } from "@/lib/api";
 
@@ -17,19 +17,29 @@ import { checkBackendHealth, type ConnectivityStatus, type HealthResult } from "
 type Listener = () => void;
 let _health: HealthResult | null = null;
 let _prevStatus: ConnectivityStatus | null = null;
-let _statusChangedAt: number = Date.now();
+let _statusChangedAt: number = 0;
+let _isFlashing: boolean = false;
 let _listeners: Listener[] = [];
 let _intervalId: ReturnType<typeof setInterval> | null = null;
 
 function subscribe(fn: Listener) {
   _listeners.push(fn);
   if (_intervalId === null) {
+    // Initialize timestamp on first subscribe if unset
+    if (_statusChangedAt === 0) {
+      _statusChangedAt = Date.now();
+    }
     // Start the shared poll
     const probe = async () => {
       const res = await checkBackendHealth();
-      if (_health === null || res.status !== _health.status) {
-        _prevStatus = _health?.status ?? null;
+      if (_health !== null && res.status !== _health.status) {
+        _prevStatus = _health.status;
         _statusChangedAt = Date.now();
+        _isFlashing = true;
+        setTimeout(() => {
+          _isFlashing = false;
+          _listeners.forEach((l) => l());
+        }, 1500);
       }
       _health = res;
       _listeners.forEach((l) => l());
@@ -51,11 +61,12 @@ function useHealth() {
   useEffect(() => {
     return subscribe(() => rerender((n) => n + 1));
   }, []);
-  return { health: _health, prevStatus: _prevStatus, changedAt: _statusChangedAt };
+  return { health: _health, prevStatus: _prevStatus, changedAt: _statusChangedAt, isFlashing: _isFlashing };
 }
 
 // --- Time-ago helper ---
 function timeAgo(ts: number): string {
+  if (ts === 0) return "just now";
   const delta = Math.round((Date.now() - ts) / 1000);
   if (delta < 5) return "just now";
   if (delta < 60) return `${delta}s ago`;
@@ -71,9 +82,8 @@ export function ConnectivityIndicator({
   compact?: boolean;
   variant?: "default" | "banner";
 }) {
-  const { health, prevStatus, changedAt } = useHealth();
+  const { health, changedAt, isFlashing } = useHealth();
   const [elapsed, setElapsed] = useState("");
-  const flashRef = useRef(false);
 
   // Update elapsed timer every second
   useEffect(() => {
@@ -81,20 +91,6 @@ export function ConnectivityIndicator({
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [changedAt]);
-
-  // Detect status change for flash animation
-  const didChange = prevStatus !== null && health !== null && prevStatus !== health.status;
-  if (didChange && !flashRef.current) flashRef.current = true;
-
-  // Clear flash after animation
-  useEffect(() => {
-    if (flashRef.current) {
-      const timer = setTimeout(() => {
-        flashRef.current = false;
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
   }, [changedAt]);
 
   if (health === null) {
@@ -117,7 +113,7 @@ export function ConnectivityIndicator({
       <div
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-500
           text-cyan-700 bg-cyan-50 border border-cyan-200/70
-          ${flashRef.current ? "ring-2 ring-cyan-400 ring-offset-1 scale-105" : ""}`}
+          ${isFlashing ? "ring-2 ring-cyan-400 ring-offset-1 scale-105" : ""}`}
         title={`Edge stack • ${health.latencyMs}ms • ${elapsed}`}
       >
         <span className="relative flex h-2 w-2">
@@ -138,7 +134,7 @@ export function ConnectivityIndicator({
       <div
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-500
           text-emerald-700 bg-emerald-50 border border-emerald-200/70
-          ${flashRef.current ? "ring-2 ring-emerald-400 ring-offset-1 scale-105" : ""}`}
+          ${isFlashing ? "ring-2 ring-emerald-400 ring-offset-1 scale-105" : ""}`}
         title={`Cloud connected • ${health.latencyMs}ms • ${elapsed}`}
       >
         <span className="h-2 w-2 rounded-full bg-emerald-500" />
@@ -153,7 +149,7 @@ export function ConnectivityIndicator({
     <div
       className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-500
         text-red-700 bg-red-50 border border-red-300/70
-        ${flashRef.current ? "ring-2 ring-red-400 ring-offset-1 scale-110 animate-pulse" : ""}`}
+        ${isFlashing ? "ring-2 ring-red-400 ring-offset-1 scale-110 animate-pulse" : ""}`}
       title={`Backend offline since ${elapsed} • Sync queue active`}
     >
       <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
