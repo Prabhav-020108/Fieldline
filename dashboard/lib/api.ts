@@ -30,7 +30,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   const apiBase = getApiBase();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
     const res = await fetch(`${apiBase}${path}`, {
@@ -60,6 +60,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     return (await res.json()) as T;
   } catch (err: unknown) {
     clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Request to ${path} timed out. Please ensure the backend is running at ${apiBase}`);
+    }
     throw err;
   }
 }
@@ -78,7 +81,7 @@ export async function login(
 
   const apiBase = getApiBase();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
     const res = await fetch(`${apiBase}/auth/token`, {
@@ -104,6 +107,9 @@ export async function login(
     return await res.json();
   } catch (err: unknown) {
     clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Login timed out. Please ensure the backend is running at ${apiBase}`);
+    }
     throw err;
   }
 }
@@ -296,7 +302,7 @@ export async function checkBackendHealth(): Promise<HealthResult> {
   const apiBase = getApiBase();
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
+    const timer = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(`${apiBase}/health`, {
       cache: "no-store",
       signal: controller.signal,

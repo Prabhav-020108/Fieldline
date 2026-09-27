@@ -407,19 +407,33 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # Phase 8c: verify the calling participant's role token locally (no
     # network call -- see role_cache.py) and stash the verified role for
-    # the rest of this call. Wrapped defensively: any failure here (no
-    # participant, a bad token, taking too long) falls back to
-    # "technician" -- least privilege -- rather than blocking the call.
-    try:
-        participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=10.0)
-        role = verify_role_token(participant.metadata, settings.fieldline_jwt_secret, company_id)
-    except Exception:
-        logger.warning(
-            "could not read a call-role token from the connecting participant "
-            "-- continuing as 'technician' (least privilege)",
-            exc_info=True,
-        )
-        role = "technician"
+    # the rest of this call. Fast-path: check if participant is already present
+    # in the room, else wait with a short 1.5s timeout so greeting starts immediately.
+    role = "technician"
+    remote = next(iter(ctx.room.remote_participants.values()), None)
+    if remote and remote.metadata:
+        try:
+            role = verify_role_token(remote.metadata, settings.fieldline_jwt_secret, company_id)
+        except Exception:
+            role = "technician"
+    else:
+        try:
+            participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=1.5)
+            if participant and participant.metadata:
+                role = verify_role_token(participant.metadata, settings.fieldline_jwt_secret, company_id)
+        except Exception:
+            pass
+
+    def _on_participant_metadata_changed(p, _prev):
+        if p.metadata:
+            try:
+                new_role = verify_role_token(p.metadata, settings.fieldline_jwt_secret, company_id)
+                set_current_role(new_role)
+                logger.info("call role dynamically updated for %s: %s", p.identity, new_role)
+            except Exception:
+                pass
+
+    ctx.room.on("participant_metadata_changed", _on_participant_metadata_changed)
     set_current_role(role)
     logger.info("call role for this session: %s", role)
 
