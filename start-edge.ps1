@@ -17,12 +17,29 @@ param (
     [string]$Component = "menu"
 )
 
-$RootDir = $PSScriptRoot
+$RootDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+
+function Get-LiveKitKeysArg {
+    $LkKey = $env:LIVEKIT_API_KEY
+    $LkSecret = $env:LIVEKIT_API_SECRET
+    $envPath = "$RootDir\agent\.env.local"
+    if ((-not $LkKey -or -not $LkSecret) -and (Test-Path $envPath)) {
+        Get-Content $envPath | ForEach-Object {
+            if ($_ -match '^\s*LIVEKIT_API_KEY\s*=\s*["'']?([^"'']+)["'']?') { $LkKey = $matches[1].Trim() }
+            if ($_ -match '^\s*LIVEKIT_API_SECRET\s*=\s*["'']?([^"'']+)["'']?') { $LkSecret = $matches[1].Trim() }
+        }
+    }
+    if ($LkKey -and $LkSecret) {
+        return "${LkKey}: ${LkSecret}`ndevkey: secret"
+    }
+    return "devkey: secret"
+}
 
 function Start-EdgeLiveKit {
     Write-Host "`n[1/5] Starting Local LiveKit WebRTC Server (Docker)..." -ForegroundColor Cyan
-    docker run -d --name livekit-edge --restart unless-stopped -p 7880:7880 -p 7881:7881 -p 50000-50100:50000-50100/udp -e LIVEKIT_KEYS="APIShMvCpU38QWX: 3ZQ8BY7YeneZ0MF0O9YHo0bc8JmNDnYxeIAOXVwvUnYA`ndevkey: secret" livekit/livekit-server:latest --dev --bind 0.0.0.0
-    Write-Host "LiveKit listening on ws://0.0.0.0:7880 (accepts both your .env.local key & devkey)" -ForegroundColor Green
+    $keys = Get-LiveKitKeysArg
+    docker run -d --name livekit-edge --restart unless-stopped -p 7880:7880 -p 7881:7881 -p 50000-50100:50000-50100/udp -e LIVEKIT_KEYS="$keys" livekit/livekit-server:latest --dev --bind 0.0.0.0
+    Write-Host "LiveKit listening on ws://0.0.0.0:7880 (accepts both your dynamic .env.local key & devkey)" -ForegroundColor Green
 }
 
 function Start-EdgePiper {
@@ -62,7 +79,7 @@ function Start-AllInWindows {
     Write-Host "`nLaunching all FieldLine Edge components in separate terminal windows..." -ForegroundColor Yellow
 
     # 1. LiveKit Server
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir'; docker run -d --name livekit-edge --restart unless-stopped -p 7880:7880 -p 7881:7881 -p 50000-50100:50000-50100/udp -e LIVEKIT_KEYS='APIShMvCpU38QWX: 3ZQ8BY7YeneZ0MF0O9YHo0bc8JmNDnYxeIAOXVwvUnYA`ndevkey: secret' livekit/livekit-server:latest --dev --bind 0.0.0.0; Write-Host 'LiveKit edge server started!'"
+    Start-EdgeLiveKit
 
     # 2. Piper TTS
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\agent'; uv run python src/local_tts_server.py"
@@ -74,7 +91,7 @@ function Start-AllInWindows {
     Start-Sleep -Seconds 3
 
     # 4. FieldLine Agent (Edge Mode)
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\agent'; `$env:LIVEKIT_URL='ws://localhost:7880'; `$env:FIELDLINE_EDGE_MODE='1'; `$env:FIELDLINE_CLOUD_DEPLOY='0'; `$env:WHISPER_MODEL_SIZE='small'; `$env:PIPER_TTS_BASE_URL='http://localhost:8880/v1'; uv run python src/agent.py dev"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\agent'; `$env:LIVEKIT_URL='ws://localhost:7880'; `$env:FIELDLINE_EDGE_MODE='1'; `$env:FIELDLINE_CLOUD_DEPLOY='0'; `$env:WHISPER_MODEL_SIZE='small'; `$env:OLLAMA_BASE_URL='http://localhost:11434/v1'; `$env:OLLAMA_MODEL='llama3.2:3b'; `$env:PIPER_TTS_BASE_URL='http://localhost:8880/v1'; uv run python src/agent.py dev"
 
     # 5. Dashboard
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$RootDir\dashboard'; `$env:NEXT_PUBLIC_LIVEKIT_URL='ws://localhost:7880'; npm run dev -- -H 0.0.0.0"

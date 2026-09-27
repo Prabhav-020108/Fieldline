@@ -15,7 +15,7 @@
 Field service technicians working on electrical switchgear, commercial HVAC systems, elevator machinery rooms, and remote telecom towers face a universal failure mode: **they cannot type on keyboards or touch screens with heavy protective gloves, and cellular connectivity drops dead the moment they step into a basement, elevator shaft, or remote facility.**
 
 FieldLine solves this with an **offline-first, hands-free voice copilot**:
-- **Dual-Operational Architecture:** Runs as an ultra-low latency, high-fidelity cloud agent (Groq Llama 3.3 120B + Cartesia Sonic-3 on LiveKit Cloud) and seamlessly hot-swaps to a **100% autonomous on-device edge stack** (faster-whisper CPU + Ollama Llama 3.2 3B + Piper Neural TTS) when connectivity is lost.
+- **Dual-Operational Architecture:** Runs as an ultra-low latency, high-fidelity cloud agent (Open-weight 120B model via Groq: `openai/gpt-oss-120b` + Cartesia Sonic-3 on LiveKit Cloud) and seamlessly hot-swaps to a **100% autonomous on-device edge stack** (faster-whisper CPU + Ollama Llama 3.2 3B + Piper Neural TTS) when connectivity is lost.
 - **Moss Offline-First `SessionIndex`:** In-process semantic memory hydrated at shift start keeps answering compliance, safety, and inventory queries with **zero network connection**.
 - **Verbatim Safety Retrieval:** Never hallucinates safety procedures. Cites exact sections and manuals word-for-word, governed by a strict mathematical confidence floor (`SAFETY_CONFIDENCE_FLOOR=0.35`).
 - **Durable Offline Sync Queue:** Audio notes, job completions, and audit logs are persisted to a transactional SQLite queue with exponential backoff, jitter, and idempotency keys, draining upstream automatically upon reconnect.
@@ -34,7 +34,7 @@ FieldLine solves this with an **offline-first, hands-free voice copilot**:
   │   Technician (Browser)                                                                          │
   │          │ WebRTC (WSS)                                                                         │
   │          ▼                                                                                      │
-  │   LiveKit Cloud ─────────▶  Groq Whisper v3 Turbo  ───▶  Groq Llama 3.3 120B  ───▶  Cartesia   │
+  │   LiveKit Cloud ─────────▶  Groq Whisper v3 Turbo  ───▶  Groq 120B (gpt-oss)  ───▶  Cartesia   │
   │   (Global Edge Mesh)        (Streaming STT)              (120B High-Reasoning)      Sonic-3 TTS │
   │          │                                                        │                      │      │
   │          ▼                                                        ▼                      │      │
@@ -163,6 +163,9 @@ Run from PowerShell in the project root:
 4. Tap **Site Demo Electrical Co.** → **Talk to agent** → **Join Call**.
 5. Speak into your phone: *"Do we have any 40-amp dual-pole breakers in stock?"*
 6. Speech is processed 100% on your laptop's CPU with zero external internet!
+
+> [!NOTE]
+> `docker-compose.edge.yml` defines the core headless edge infrastructure (`livekit`, `backend`, and `agent`). When demonstrating to a smartphone over Wi-Fi hotspot, the Next.js dashboard is launched with host networking via `npm run dev -- -H 0.0.0.0` (as handled automatically by `start-edge.ps1`) so the phone's browser can directly load the dispatch UI over LAN.
 
 For complete scripted pitch beats and diagnostic procedures, refer to [docs/RUNBOOK.md](file:///c:/Users/Prabhav/Downloads/Fieldline/docs/RUNBOOK.md).
 

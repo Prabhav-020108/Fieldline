@@ -17,8 +17,8 @@ This runbook is the definitive operational manual for deploying and demonstratin
   │   Technician (PC Browser)                                                                   │
   │          │                                                                                  │
   │          ▼                                                                                  │
-  │   LiveKit Cloud  ───▶  Groq Whisper v3 Turbo  ───▶  Groq Llama 3.3 120B  ───▶  Cartesia     │
-  │   (Global WebRTC)      (Cloud Speech-to-Text)       (High-Reasoning LLM)       Sonic-3 TTS  │
+  │   LiveKit Cloud  ───▶  Groq Whisper v3 Turbo  ───▶  Groq 120B (gpt-oss)  ───▶  Cartesia     │
+  │   (Global WebRTC)      (Cloud Speech-to-Text)       (120B High-Reasoning)      Sonic-3 TTS  │
   │          ▲                                                    │                     │       │
   │          │                                                    ▼                     │       │
   │   Next.js 16 (Port 3000) ───▶ FastAPI Backend (Port 8000) ──▶ Moss Cloud Session   ◀────────┘
@@ -122,6 +122,9 @@ Open PowerShell in the project root:
 3. FastAPI Backend bound to `0.0.0.0:8000` with `FIELDLINE_EDGE_MODE=1`.
 4. FieldLine Voice Agent in pure offline Edge mode (`FIELDLINE_EDGE_MODE=1`).
 5. Next.js Dashboard bound to `0.0.0.0:3000`.
+
+> [!NOTE]
+> `docker-compose.edge.yml` defines the core headless edge infrastructure (`livekit`, `backend`, and `agent`). When demonstrating to a mobile phone over a Wi-Fi hotspot, the dashboard is run with host networking via `npm run dev -- -H 0.0.0.0` (as handled automatically by `start-edge.ps1`) so the phone's browser can directly load the dispatch UI over LAN.
 
 ### 4.3 Phone Access
 1. On your smartphone's browser (Chrome or Safari), open:

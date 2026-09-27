@@ -279,7 +279,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("  FIELDLINE AGENT: PRIMARY CLOUD DEMO MODE ACTIVE")
         logger.info("  LiveKit Cloud: %s", configured_livekit_url)
         logger.info("  STT: Groq Whisper Large v3 Turbo")
-        logger.info("  LLM: Groq Llama 3.3 120B (openai/gpt-oss-120b)")
+        logger.info("  LLM: Groq 120B (openai/gpt-oss-120b)")
         logger.info("  TTS: Cartesia Sonic-3 (LiveKit Cloud Inference)")
         logger.info("=" * 65)
 

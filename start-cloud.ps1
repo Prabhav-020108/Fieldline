@@ -5,7 +5,7 @@
 # restoring the pristine cloud configuration from .env.local:
 #   - LiveKit Cloud (wss://fieldline-y34tzh74.livekit.cloud)
 #   - Groq Whisper Large v3 Turbo (STT)
-#   - Groq Llama 3.3 120B (openai/gpt-oss-120b)
+#   - Groq 120B (openai/gpt-oss-120b)
 #   - Cartesia Sonic-3 via LiveKit Cloud Inference (TTS)
 #   - FastAPI Backend on localhost:8000
 #   - Next.js Dashboard on localhost:3000
@@ -40,7 +40,7 @@ function Start-CloudBackend {
 function Start-CloudAgent {
     Clear-EdgeEnv
     Write-Host "`nStarting FieldLine Voice Agent in Primary Cloud Demo Mode..." -ForegroundColor Cyan
-    Write-Host "  Using: LiveKit Cloud + Groq Llama 3.3 120B + Cartesia Sonic-3" -ForegroundColor Yellow
+    Write-Host "  Using: LiveKit Cloud + Groq 120B (openai/gpt-oss-120b) + Cartesia Sonic-3" -ForegroundColor Yellow
     Set-Location "$RootDir\agent"
     uv run python src/agent.py dev
 }
