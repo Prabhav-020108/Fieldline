@@ -35,11 +35,21 @@ function Get-LiveKitKeysArg {
     return "devkey: secret"
 }
 
+function Get-HostLanIp {
+    $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+           Where-Object { ($_.InterfaceAlias -match 'Wi-Fi' -or $_.InterfaceAlias -match 'Ethernet') -and $_.IPAddress -notmatch '^(169\.254|127\.|172\.(1[6-9]|2[0-9]|3[0-1]))' } |
+           Select-Object -ExpandProperty IPAddress -First 1)
+    if (-not $ip) { $ip = "127.0.0.1" }
+    return $ip
+}
+
 function Start-EdgeLiveKit {
     Write-Host "`n[1/5] Starting Local LiveKit WebRTC Server (Docker)..." -ForegroundColor Cyan
     $keys = Get-LiveKitKeysArg
-    docker run -d --name livekit-edge --restart unless-stopped -p 7880:7880 -p 7881:7881 -p 50000-50100:50000-50100/udp -e LIVEKIT_KEYS="$keys" livekit/livekit-server:latest --dev --bind 0.0.0.0
-    Write-Host "LiveKit listening on ws://0.0.0.0:7880 (accepts both your dynamic .env.local key & devkey)" -ForegroundColor Green
+    $lanIp = Get-HostLanIp
+    docker rm -f livekit-edge 2>$null | Out-Null
+    docker run -d --name livekit-edge --restart unless-stopped -p 7880:7880 -p 7881:7881 -p 50000-50100:50000-50100/udp -e LIVEKIT_KEYS="$keys" livekit/livekit-server:latest --dev --bind 0.0.0.0 --node-ip "$lanIp"
+    Write-Host "LiveKit listening on ws://0.0.0.0:7880 (Advertised WebRTC node-ip: $lanIp)" -ForegroundColor Green
 }
 
 function Start-EdgePiper {

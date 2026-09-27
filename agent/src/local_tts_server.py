@@ -63,6 +63,15 @@ def _get_voice():
     return _voice
 
 
+@app.on_event("startup")
+def prewarm_voice():
+    try:
+        _get_voice()
+        logger.info("Piper voice pre-warmed on server startup")
+    except Exception as exc:
+        logger.warning("Could not pre-warm Piper voice: %s", exc)
+
+
 class SpeechRequest(BaseModel):
     model: str = "piper"
     input: str
